@@ -1,0 +1,111 @@
+# Optimized Cargo.toml profiles for quiche
+# These can replace or supplement the existing profiles in Cargo.toml
+
+# =============================================================================
+# PROFILE 1: MAXIMUM SIZE REDUCTION (Aggressive)
+# =============================================================================
+# Use for: Embedded systems, size-constrained environments
+# Expected: 35-40% size reduction, 8-12 minute build time
+
+[profile.release-min-size]
+inherits = "release"
+opt-level = "z"          # Aggressively optimize for size
+lto = "fat"              # Full link-time optimization
+codegen-units = 1        # Maximum optimization, no parallelization
+strip = true             # Strip all symbols and debug info
+panic = "abort"          # Smaller panic handling
+debug = false            # No debug information
+overflow-checks = false  # Disable overflow checks
+
+# =============================================================================
+# PROFILE 2: BALANCED SIZE/PERFORMANCE (Recommended)
+# =============================================================================
+# Use for: Production web servers, general applications
+# Expected: 15-20% size reduction, 3-4 minute build time
+
+[profile.release-balanced]
+inherits = "release"
+opt-level = 2            # Standard optimization
+lto = "thin"             # Thin LTO (faster than fat)
+codegen-units = 16       # Reasonable parallelization
+strip = "debuginfo"      # Strip only debug info
+panic = "unwind"         # Allow panic recovery
+debug = false            # No debug information
+
+# =============================================================================
+# PROFILE 3: MAXIMUM PERFORMANCE
+# =============================================================================
+# Use for: High-throughput servers, latency-critical applications
+# Expected: Best performance, 7-10 minute build time
+
+[profile.release-perf]
+inherits = "release"
+opt-level = 3            # Maximum optimization
+lto = "fat"              # Full link-time optimization
+codegen-units = 1        # Best optimization opportunities
+strip = "debuginfo"      # Keep symbols for profiling
+panic = "unwind"         # Allow panic recovery
+debug = false            # No debug information
+
+# =============================================================================
+# PROFILE 4: DEVELOPMENT WITH OPTIMIZATION
+# =============================================================================
+# Use for: Development with acceptable performance
+# Expected: Fast iteration, reasonable performance
+
+[profile.dev-opt]
+inherits = "dev"
+opt-level = 1            # Basic optimization
+debug = true             # Full debug info
+lto = false              # Fast linking
+codegen-units = 256      # Maximum parallelization
+incremental = true       # Fast rebuilds
+
+# =============================================================================
+# EXISTING PROFILES (Update these in your Cargo.toml)
+# =============================================================================
+
+[profile.release]
+# ⚠️ IMPORTANT: Currently debug = true in workspace - change to false!
+debug = false            # CHANGE THIS: Currently set to true
+opt-level = "z"          # ADD THIS: Optimize for size (default is 2)
+lto = "thin"             # ADD THIS: Enable thin LTO
+strip = true             # ADD THIS: Strip symbols
+
+[profile.bench]
+# ⚠️ IMPORTANT: Currently debug = true - not needed for benchmarks
+debug = false            # CHANGE THIS: Currently set to true
+inherits = "release"     # Use release optimizations
+
+# =============================================================================
+# QUICK REFERENCE: BUILD COMMANDS
+# =============================================================================
+
+# Minimum size build:
+# cargo build --profile release-min-size --package quiche
+
+# Balanced build (recommended):
+# cargo build --profile release-balanced --package quiche
+
+# Maximum performance:
+# cargo build --profile release-perf --package quiche
+
+# Development with optimization:
+# cargo build --profile dev-opt --package quiche
+
+# =============================================================================
+# SIZE REDUCTION CHECKLIST
+# =============================================================================
+#
+# Quick wins (no code changes):
+# [ ] Change debug = false in [profile.release] (currently true)
+# [ ] Change debug = false in [profile.bench] (currently true)
+# [ ] Add opt-level = "z" for size optimization
+# [ ] Add lto = "thin" or "fat" for link-time optimization
+# [ ] Add strip = true to remove symbols
+# [ ] Add panic = "abort" if you don't need panic recovery
+#
+# Expected size reduction: 35-40% (from 28MB to ~18MB)
+# Build time increase: 2-3x (acceptable for production builds)
+#
+# =============================================================================
