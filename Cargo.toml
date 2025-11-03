@@ -1,16 +1,16 @@
 [workspace]
 members = [
-  "apps",
+  # "apps",  # Temporarily excluded to prevent http3 feature from being enabled
   "buffer-pool",
   "datagram-socket",
-  "h3i",
+  # "h3i",  # Temporarily excluded to prevent http3 feature from being enabled
   "octets",
   "qlog",
   "quiche",
   "task-killswitch",
-  "tokio-quiche",
+  # "tokio-quiche",  # Temporarily excluded to prevent http3 feature from being enabled
 ]
-exclude = ["fuzz", "tools/http3_test"]
+exclude = ["fuzz", "tools/http3_test", "apps", "h3i", "tokio-quiche"]
 resolver = "2"
 
 [workspace.package]

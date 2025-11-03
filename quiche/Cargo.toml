@@ -28,7 +28,7 @@ include = [
 ]
 
 [features]
-default = ["boringssl-vendored"]
+default = ["boringssl-vendored", "http3"]
 
 # Build the vendored BoringSSL library.
 boringssl-vendored = []
@@ -54,6 +54,9 @@ ffi = ["dep:cdylib-link-lines"]
 
 # Exposes internal APIs that have no stability guarantees across versions.
 internal = []
+
+# Enable HTTP/3 support (disable to reduce binary size by 30-40%).
+http3 = []
 
 [package.metadata.release]
 tag-prefix = ""

@@ -9378,6 +9378,7 @@ mod dgram;
 mod ffi;
 mod flowcontrol;
 mod frame;
+#[cfg(feature = "http3")]
 pub mod h3;
 mod minmax;
 mod packet;
