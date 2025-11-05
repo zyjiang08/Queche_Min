@@ -1,5 +1,0 @@
-/Users/jiangzhongyang/work/live/CDN/quiche/quiche/examples/build/debug/build/quiche-3ef0da49e9e35f52/out/build/CMakeFiles/crypto.dir
-/Users/jiangzhongyang/work/live/CDN/quiche/quiche/examples/build/debug/build/quiche-3ef0da49e9e35f52/out/build/CMakeFiles/ssl.dir
-/Users/jiangzhongyang/work/live/CDN/quiche/quiche/examples/build/debug/build/quiche-3ef0da49e9e35f52/out/build/CMakeFiles/bssl.dir
-/Users/jiangzhongyang/work/live/CDN/quiche/quiche/examples/build/debug/build/quiche-3ef0da49e9e35f52/out/build/CMakeFiles/edit_cache.dir
-/Users/jiangzhongyang/work/live/CDN/quiche/quiche/examples/build/debug/build/quiche-3ef0da49e9e35f52/out/build/CMakeFiles/rebuild_cache.dir
