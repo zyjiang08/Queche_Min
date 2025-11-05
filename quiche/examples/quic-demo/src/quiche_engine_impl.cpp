@@ -563,6 +563,7 @@ ssize_t QuicheEngineImpl::write(uint64_t stream_id, const uint8_t* data, size_t 
 
 ssize_t QuicheEngineImpl::read(uint64_t stream_id, uint8_t* buf, size_t buf_len, bool& fin) {
     if (!conn || !buf) {
+        last_error = "Invalid connection or buffer";
         return -1;
     }
 
@@ -573,11 +574,21 @@ ssize_t QuicheEngineImpl::read(uint64_t stream_id, uint8_t* buf, size_t buf_len,
 
     fin = local_fin;
 
-    if (read_len < 0 && read_len != QUICHE_ERR_DONE) {
-        last_error = "Stream recv failed";
+    // Normalize return value:
+    // - Positive: actual bytes read
+    // - 0: no data available or non-fatal error
+    // - -1: fatal error
+    if (read_len > 0) {
+        return read_len;  // Data read successfully
+    } else if (read_len == QUICHE_ERR_DONE) {
+        return 0;  // No data available
+    } else if (read_len == QUICHE_ERR_INVALID_STREAM_STATE) {
+        return 0;  // Stream not ready yet (non-fatal)
+    } else {
+        // Fatal errors
+        last_error = "Stream recv error: " + std::to_string(read_len);
+        return -1;
     }
-
-    return read_len;
 }
 
 bool QuicheEngineImpl::close(uint64_t app_error, const std::string& reason) {

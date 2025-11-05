@@ -1,5 +1,5 @@
 // client.cpp
-// QUIC Client Demo - Bidirectional Data Transfer Test
+// QUIC Client Demo - Bidirectional Data Transfer Test with Polling
 //
 // Copyright (C) 2025, Cloudflare, Inc.
 // All rights reserved.
@@ -21,6 +21,55 @@ static std::atomic<bool> connection_ready(false);
 static std::atomic<bool> should_stop(false);
 static QuicheEngine* global_engine = nullptr;
 static std::atomic<uint64_t> total_received(0);
+
+// Data receiving thread - polls for data from server
+static void dataReceivingThread() {
+    // Wait for connection to be ready
+    while (!connection_ready.load() && !should_stop.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    if (should_stop.load()) {
+        return;
+    }
+
+    std::cout << "✓ Starting data reception polling thread..." << std::endl;
+
+    uint8_t buf[65536];  // 64KB buffer
+    bool fin = false;
+
+    // Poll for data until connection closes
+    while (!should_stop.load()) {
+        if (!global_engine) {
+            break;
+        }
+
+        // Try to read data from stream 4
+        ssize_t len = global_engine->read(4, buf, sizeof(buf), fin);
+
+        if (len > 0) {
+            // Data received
+            total_received.fetch_add(len);
+            std::cout << "✓ Received " << len << " bytes from server "
+                     << "(total received: " << total_received.load() << " bytes)" << std::endl;
+        } else if (len == 0) {
+            // No data available, continue polling
+        } else {
+            // Error occurred
+            std::cerr << "✗ Read error on stream 4" << std::endl;
+            break;
+        }
+
+        if (fin) {
+            std::cout << "✓ Server stream finished. Total received: "
+                     << total_received.load() << " bytes" << std::endl;
+            break;
+        }
+
+        // Small delay between polls to avoid busy waiting
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+}
 
 // Data sending thread - sends 200KB per second
 static void dataSendingThread() {
@@ -96,12 +145,12 @@ static void dataSendingThread() {
     }
 
     // Wait a bit for final responses
-    std::this_thread::sleep_for(std::chrono::seconds(1));
+    std::this_thread::sleep_for(std::chrono::seconds(2));
 
     should_stop.store(true);
 }
 
-// Event callback handler
+// Simplified event callback handler - no STREAM_READABLE event
 static void onEngineEvent(
     QuicheEngine* engine,
     EngineEvent event,
@@ -121,41 +170,6 @@ static void onEngineEvent(
 
             } catch (const std::bad_variant_access&) {
                 std::cerr << "✗ Invalid event data for CONNECTED event" << std::endl;
-            }
-            break;
-        }
-
-        case EngineEvent::STREAM_READABLE: {
-            try {
-                uint64_t stream_id = std::get<uint64_t>(event_data);
-
-                // Read data from stream
-                if (engine) {
-                    bool fin = false;
-                    uint8_t buf[65536];
-
-                    // Read all available data
-                    while (true) {
-                        ssize_t len = engine->read(stream_id, buf, sizeof(buf), fin);
-
-                        if (len > 0) {
-                            total_received.fetch_add(len);
-                            std::cout << "✓ Received " << len << " bytes from server "
-                                     << "(total received: " << total_received.load() << " bytes)" << std::endl;
-                        }
-
-                        if (len <= 0 || fin) {
-                            break;
-                        }
-                    }
-
-                    if (fin) {
-                        std::cout << "✓ Server stream finished. Total received: "
-                                 << total_received.load() << " bytes" << std::endl;
-                    }
-                }
-            } catch (const std::bad_variant_access&) {
-                std::cerr << "✗ Invalid event data for STREAM_READABLE event" << std::endl;
             }
             break;
         }
@@ -192,6 +206,7 @@ static void onEngineEvent(
         }
 
         default:
+            // Ignore other events (STREAM_READABLE not used in polling mode)
             break;
     }
 }
@@ -208,11 +223,11 @@ int main(int argc, char* argv[]) {
     const std::string host = argv[1];
     const std::string port = argv[2];
 
-    std::cout << "QUIC Client Demo - Bidirectional Data Transfer" << std::endl;
-    std::cout << "===============================================" << std::endl;
+    std::cout << "QUIC Client Demo - Bidirectional Data Transfer (Polling Mode)" << std::endl;
+    std::cout << "=============================================================" << std::endl;
     std::cout << "Upload:   200KB/sec for 5 seconds" << std::endl;
-    std::cout << "Download: Receiving from server (1.5MB/sec)" << std::endl;
-    std::cout << "-----------------------------------------------" << std::endl;
+    std::cout << "Download: Polling for data from server" << std::endl;
+    std::cout << "-------------------------------------------------------------" << std::endl;
     std::cout << "Connecting to " << host << ":" << port << "..." << std::endl << std::endl;
 
     // Prepare configuration using map with enum keys
@@ -228,7 +243,7 @@ int main(int argc, char* argv[]) {
     config[ConfigKey::INITIAL_MAX_STREAMS_BIDI] = static_cast<uint64_t>(100);    // 100 streams
     config[ConfigKey::INITIAL_MAX_STREAMS_UNI] = static_cast<uint64_t>(100);     // 100 streams
     config[ConfigKey::DISABLE_ACTIVE_MIGRATION] = true;                          // Disable migration
-    config[ConfigKey::ENABLE_DEBUG_LOG] = true;                                  // Debug logging on for testing
+    config[ConfigKey::ENABLE_DEBUG_LOG] = false;                                 // Debug logging off
 
     try {
         // Initialize engine with configuration map
@@ -248,6 +263,9 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
+        // Start data receiving thread (polling mode)
+        std::thread receiver_thread(dataReceivingThread);
+
         // Start data sending thread
         std::thread sender_thread(dataSendingThread);
 
@@ -257,7 +275,7 @@ int main(int argc, char* argv[]) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
             auto elapsed = std::chrono::steady_clock::now() - start_time;
-            if (std::chrono::duration_cast<std::chrono::seconds>(elapsed).count() > 10) {
+            if (std::chrono::duration_cast<std::chrono::seconds>(elapsed).count() > 15) {
                 std::cout << "\n⚠ Timeout reached, closing connection..." << std::endl;
                 should_stop.store(true);
                 break;
@@ -267,7 +285,10 @@ int main(int argc, char* argv[]) {
         // Close connection
         engine.close(0, "Test completed");
 
-        // Wait for sender thread to finish
+        // Wait for threads to finish
+        if (receiver_thread.joinable()) {
+            receiver_thread.join();
+        }
         if (sender_thread.joinable()) {
             sender_thread.join();
         }
