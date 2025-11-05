@@ -97,8 +97,8 @@ QuicheEngineImpl::~QuicheEngineImpl() {
         mCmdQueue.push(cmd);
         ev_async_send(mLoop, &mAsyncWatcher);
 
-        if (mThreadStarted) {
-            pthread_join(mLoopThread, nullptr);
+        if (mThreadStarted && mLoopThread.joinable()) {
+            mLoopThread.join();  // C++11 thread join (replaces pthread_join)
             mThreadStarted = false;
         }
     }
@@ -486,11 +486,13 @@ void QuicheEngineImpl::processCommands() {
     }
 }
 
-void* QuicheEngineImpl::eventLoopThread(void* arg) {
-    QuicheEngineImpl* impl = static_cast<QuicheEngineImpl*>(arg);
+void QuicheEngineImpl::eventLoopThread(QuicheEngineImpl* impl) {
+    // Set thread name for debugging and profiling (cross-platform)
+    thread_utils::setCurrentThreadName("QuicEventLoop");
+
+    // Run event loop
     ev_run(impl->mLoop, 0);
     impl->mIsRunning = false;
-    return nullptr;
 }
 
 bool QuicheEngineImpl::start() {
@@ -534,17 +536,19 @@ bool QuicheEngineImpl::start() {
     // Send initial packet
     flushEgress();
 
-    // Start event mLoop in background thread
+    // Start event mLoop in background thread using C++11 std::thread
     mIsRunning = true;
-    if (pthread_create(&mLoopThread, nullptr, eventLoopThread, this) != 0) {
-        mLastError = "Failed to create event mLoop thread";
+    try {
+        mLoopThread = std::thread(eventLoopThread, this);
+        mThreadStarted = true;
+    } catch (const std::system_error& e) {
+        mLastError = "Failed to create event loop thread: " + std::string(e.what());
         mIsRunning = false;
         ev_loop_destroy(mLoop);
         mLoop = nullptr;
         return false;
     }
 
-    mThreadStarted = true;
     return true;
 }
 
@@ -567,9 +571,9 @@ void QuicheEngineImpl::shutdown(uint64_t app_error, const std::string& reason) {
         ev_break(mLoop, EVBREAK_ONE);
     }
 
-    // Wait for thread to complete
-    if (mThreadStarted) {
-        pthread_join(mLoopThread, nullptr);
+    // Wait for thread to complete using C++11 std::thread::join()
+    if (mThreadStarted && mLoopThread.joinable()) {
+        mLoopThread.join();
         mThreadStarted = false;
     }
 

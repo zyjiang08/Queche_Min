@@ -34,6 +34,7 @@ SERVER_C_SRC = $(SRC_DIR)/server.c
 # C++ Source files (modularized)
 ENGINE_IMPL_CPP_SRC = $(SRC_DIR)/quiche_engine_impl.cpp
 ENGINE_API_CPP_SRC = $(SRC_DIR)/quiche_engine_api.cpp
+THREAD_UTILS_CPP_SRC = $(SRC_DIR)/thread_utils.cpp
 CLIENT_CPP_SRC = $(SRC_DIR)/client.cpp
 
 # C Object files
@@ -44,10 +45,11 @@ SERVER_C_OBJ = $(BUILD_DIR)/server_c.o
 # C++ Object files
 ENGINE_IMPL_CPP_OBJ = $(BUILD_DIR)/quiche_engine_impl.o
 ENGINE_API_CPP_OBJ = $(BUILD_DIR)/quiche_engine_api.o
+THREAD_UTILS_CPP_OBJ = $(BUILD_DIR)/thread_utils.o
 CLIENT_CPP_OBJ = $(BUILD_DIR)/client.o
 
 # All C++ engine objects
-ENGINE_CPP_OBJS = $(ENGINE_IMPL_CPP_OBJ) $(ENGINE_API_CPP_OBJ)
+ENGINE_CPP_OBJS = $(ENGINE_IMPL_CPP_OBJ) $(ENGINE_API_CPP_OBJ) $(THREAD_UTILS_CPP_OBJ)
 
 # Default target - build C++ version by default
 all: $(BUILD_DIR) $(CLIENT_CPP) $(SERVER)
@@ -84,6 +86,10 @@ $(ENGINE_IMPL_CPP_OBJ): $(ENGINE_IMPL_CPP_SRC) $(SRC_DIR)/quiche_engine_impl.h $
 # Compile C++ engine API object
 $(ENGINE_API_CPP_OBJ): $(ENGINE_API_CPP_SRC) $(SRC_DIR)/quiche_engine.h $(SRC_DIR)/quiche_engine_impl.h
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $(ENGINE_API_CPP_SRC) -o $(ENGINE_API_CPP_OBJ)
+
+# Compile C++ thread utils object
+$(THREAD_UTILS_CPP_OBJ): $(THREAD_UTILS_CPP_SRC) $(SRC_DIR)/thread_utils.h
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $(THREAD_UTILS_CPP_SRC) -o $(THREAD_UTILS_CPP_OBJ)
 
 # Compile C++ client object
 $(CLIENT_CPP_OBJ): $(CLIENT_CPP_SRC) $(SRC_DIR)/quiche_engine.h

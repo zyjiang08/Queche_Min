@@ -8,11 +8,13 @@
 #include <map>
 #include <vector>
 #include <mutex>
+#include <thread>
+
+#include "thread_utils.h"
 
 extern "C" {
 #include <sys/types.h>
 #include <sys/socket.h>
-#include <pthread.h>
 #include <ev.h>
 #include <quiche.h>
 }
@@ -139,7 +141,7 @@ private:
     ev_io mIoWatcher;
     ev_timer mTimer;
     ev_async mAsyncWatcher;
-    pthread_t mLoopThread;
+    std::thread mLoopThread;  // C++11 thread (replaces pthread_t)
     bool mThreadStarted;
 
     // Command queue
@@ -167,7 +169,7 @@ private:
     void readFromQuicheToBuffer(uint64_t stream_id);
 
     // Static callbacks
-    static void* eventLoopThread(void* arg);
+    static void eventLoopThread(QuicheEngineImpl* impl);  // C++11 thread function
     static void recvCallback(EV_P_ ev_io* w, int revents);
     static void timeoutCallback(EV_P_ ev_timer* w, int revents);
     static void asyncCallback(EV_P_ ev_async* w, int revents);
