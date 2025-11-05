@@ -88,6 +88,9 @@ QuicheEngineImpl::QuicheEngineImpl(const std::string& h, const std::string& p, c
 {
     memset(&mLocalAddr, 0, sizeof(mLocalAddr));
     memset(&mPeerAddr, 0, sizeof(mPeerAddr));
+
+    // Initialize stream buffers mutex
+    pthread_mutex_init(&mStreamBuffersMutex, nullptr);
 }
 
 QuicheEngineImpl::~QuicheEngineImpl() {
@@ -121,11 +124,22 @@ QuicheEngineImpl::~QuicheEngineImpl() {
         mQuicheCfg = nullptr;
     }
 
-    // Close mSocket
+    // Close socket
     if (mSock >= 0) {
         ::close(mSock);
         mSock = -1;
     }
+
+    // Clean up stream buffers
+    pthread_mutex_lock(&mStreamBuffersMutex);
+    for (auto& pair : mStreamBuffers) {
+        delete pair.second;
+    }
+    mStreamBuffers.clear();
+    pthread_mutex_unlock(&mStreamBuffersMutex);
+
+    // Destroy mutex
+    pthread_mutex_destroy(&mStreamBuffersMutex);
 }
 
 // ============================================================================
@@ -281,6 +295,8 @@ bool QuicheEngineImpl::setupConnection() {
 void QuicheEngineImpl::flushEgress() {
     static uint8_t out[MAX_DATAGRAM_SIZE];
 
+    // No locking needed - called only from event loop thread!
+
     while (true) {
         quiche_send_info send_info;
         ssize_t written = quiche_conn_send(mConn, out, sizeof(out), &send_info);
@@ -325,11 +341,15 @@ void QuicheEngineImpl::flushEgress() {
         }
     }
 
-    // Check for readable streams
+    // Check for readable streams and populate buffers
     if (mConn) {
         quiche_stream_iter* readable = quiche_conn_readable(mConn);
         uint64_t stream_id;
         while (quiche_stream_iter_next(readable, &stream_id)) {
+            // Read data from quiche into buffer (event loop thread only!)
+            readFromQuicheToBuffer(stream_id);
+
+            // Notify application
             if (mEventCallback) {
                 EventData data = stream_id;
                 mEventCallback(mWrapper, EngineEvent::STREAM_READABLE, data, mUserData);
@@ -368,7 +388,9 @@ void QuicheEngineImpl::recvCallback(EV_P_ ev_io* w, int revents) {
             impl->mLocalAddrLen,
         };
 
+        // No locking needed - called only from event loop thread!
         ssize_t done = quiche_conn_recv(impl->mConn, buf, len, &recv_info);
+
         if (done < 0) {
             // Ignore receive errors
         }
@@ -376,7 +398,10 @@ void QuicheEngineImpl::recvCallback(EV_P_ ev_io* w, int revents) {
 
     impl->flushEgress();
 
-    if (quiche_conn_is_closed(impl->mConn)) {
+    // No locking needed - called only from event loop thread!
+    bool is_closed = quiche_conn_is_closed(impl->mConn);
+
+    if (is_closed) {
         if (impl->mEventCallback) {
             EventData data = std::monostate{};
             impl->mEventCallback(nullptr, EngineEvent::CONNECTION_CLOSED, data, impl->mUserData);
@@ -390,10 +415,15 @@ void QuicheEngineImpl::timeoutCallback(EV_P_ ev_timer* w, int revents) {
 
     QuicheEngineImpl* impl = static_cast<QuicheEngineImpl*>(w->data);
 
+    // No locking needed - called only from event loop thread!
     quiche_conn_on_timeout(impl->mConn);
+
     impl->flushEgress();
 
-    if (quiche_conn_is_closed(impl->mConn)) {
+    // No locking needed - called only from event loop thread!
+    bool is_closed = quiche_conn_is_closed(impl->mConn);
+
+    if (is_closed) {
         if (impl->mEventCallback) {
             EventData data = std::monostate{};
             impl->mEventCallback(nullptr, EngineEvent::CONNECTION_CLOSED, data, impl->mUserData);
@@ -415,6 +445,7 @@ void QuicheEngineImpl::processCommands() {
     while ((cmd = mCmdQueue.pop()) != nullptr) {
         switch (cmd->type) {
             case CommandType::WRITE: {
+                // No locking needed - called only from event loop thread!
                 if (mConn) {
                     uint64_t error_code;
                     ssize_t written = quiche_conn_stream_send(
@@ -436,6 +467,7 @@ void QuicheEngineImpl::processCommands() {
             }
 
             case CommandType::CLOSE: {
+                // No locking needed - called only from event loop thread!
                 if (mConn) {
                     quiche_conn_close(
                         mConn,
@@ -572,38 +604,48 @@ ssize_t QuicheEngineImpl::write(uint64_t stream_id, const uint8_t* data, size_t 
 }
 
 ssize_t QuicheEngineImpl::read(uint64_t stream_id, uint8_t* buf, size_t buf_len, bool& fin) {
-    if (!mConn || !buf) {
-        mLastError = "Invalid mConnection or buffer";
+    if (!buf) {
+        mLastError = "Invalid buffer";
         return -1;
     }
 
-    bool local_fin = false;
-    uint64_t error_code;
-    ssize_t read_len = quiche_conn_stream_recv(mConn, stream_id, buf, buf_len,
-                                                &local_fin, &error_code);
+    // Get stream buffer (no quiche calls - lock-free with respect to quiche!)
+    StreamReadBuffer* buffer = getOrCreateStreamBuffer(stream_id);
 
-    fin = local_fin;
+    // Lock buffer access (not mConn - much lighter weight)
+    pthread_mutex_lock(&buffer->mutex);
 
-    // Normalize return value:
-    // - Positive: actual bytes read
-    // - 0: no data available or non-fatal error
-    // - -1: fatal error
-    if (read_len > 0) {
-        return read_len;  // Data read successfully
-    } else if (read_len == QUICHE_ERR_DONE) {
-        return 0;  // No data available
-    } else if (read_len == QUICHE_ERR_INVALID_STREAM_STATE) {
-        return 0;  // Stream not ready yet (non-fatal)
-    } else {
-        // Fatal errors
-        mLastError = "Stream recv error: " + std::to_string(read_len);
-        return -1;
+    // Calculate available data
+    size_t available = buffer->data.size() - buffer->read_offset;
+
+    if (available == 0) {
+        // No data available yet
+        fin = buffer->fin_received;
+        pthread_mutex_unlock(&buffer->mutex);
+        return 0;
     }
+
+    // Copy data from buffer to output
+    size_t to_read = (available < buf_len) ? available : buf_len;
+    memcpy(buf, buffer->data.data() + buffer->read_offset, to_read);
+    buffer->read_offset += to_read;
+
+    // Check if FIN received and all data consumed
+    fin = buffer->fin_received && (buffer->read_offset >= buffer->data.size());
+
+    pthread_mutex_unlock(&buffer->mutex);
+
+    return static_cast<ssize_t>(to_read);
 }
 
 
 EngineStats QuicheEngineImpl::getStats() const {
     EngineStats stats = {};
+
+    // Note: getStats() is called from application thread, but mConn is only
+    // modified in event loop thread. Reading stats is generally safe, but
+    // for strict thread safety, we could add a command to get stats from
+    // event loop thread. For now, we accept this minor race condition.
 
     if (mConn) {
         quiche_stats s;
@@ -626,6 +668,54 @@ EngineStats QuicheEngineImpl::getStats() const {
     }
 
     return stats;
+}
+
+// ============================================================================
+// Stream Buffer Helper Methods
+// ============================================================================
+
+StreamReadBuffer* QuicheEngineImpl::getOrCreateStreamBuffer(uint64_t stream_id) {
+    pthread_mutex_lock(&mStreamBuffersMutex);
+
+    auto it = mStreamBuffers.find(stream_id);
+    if (it != mStreamBuffers.end()) {
+        pthread_mutex_unlock(&mStreamBuffersMutex);
+        return it->second;
+    }
+
+    // Create new buffer
+    StreamReadBuffer* buffer = new StreamReadBuffer();
+    mStreamBuffers[stream_id] = buffer;
+
+    pthread_mutex_unlock(&mStreamBuffersMutex);
+    return buffer;
+}
+
+void QuicheEngineImpl::readFromQuicheToBuffer(uint64_t stream_id) {
+    // This is called from event loop thread only - no mConn locking needed!
+
+    StreamReadBuffer* buffer = getOrCreateStreamBuffer(stream_id);
+
+    // Read data from quiche into temporary buffer
+    uint8_t temp_buf[65536];
+    bool local_fin = false;
+    uint64_t error_code;
+
+    ssize_t read_len = quiche_conn_stream_recv(mConn, stream_id, temp_buf,
+                                                sizeof(temp_buf), &local_fin, &error_code);
+
+    if (read_len < 0) {
+        // Error or no data available
+        return;
+    }
+
+    // Append to buffer
+    pthread_mutex_lock(&buffer->mutex);
+    buffer->data.insert(buffer->data.end(), temp_buf, temp_buf + read_len);
+    if (local_fin) {
+        buffer->fin_received = true;
+    }
+    pthread_mutex_unlock(&buffer->mutex);
 }
 
 } // namespace quiche

@@ -5,6 +5,8 @@
 
 #include <cstring>
 #include <memory>
+#include <map>
+#include <vector>
 
 extern "C" {
 #include <sys/types.h>
@@ -76,6 +78,26 @@ private:
     pthread_mutex_t mutex;
 };
 
+// Per-stream read buffer (populated by event loop, read by application threads)
+struct StreamReadBuffer {
+    std::vector<uint8_t> data;
+    size_t read_offset;
+    bool fin_received;
+    pthread_mutex_t mutex;
+
+    StreamReadBuffer() : read_offset(0), fin_received(false) {
+        pthread_mutex_init(&mutex, nullptr);
+    }
+
+    ~StreamReadBuffer() {
+        pthread_mutex_destroy(&mutex);
+    }
+
+    // Disable copy
+    StreamReadBuffer(const StreamReadBuffer&) = delete;
+    StreamReadBuffer& operator=(const StreamReadBuffer&) = delete;
+};
+
 // Engine implementation class (PIMPL)
 class QuicheEngineImpl {
 public:
@@ -104,7 +126,7 @@ private:
     std::string mPort;
     ConfigMap mConfig;
 
-    // QUIC objects
+    // QUIC objects (accessed only from event loop thread - no locking needed!)
     quiche_config* mQuicheCfg;
     quiche_conn* mConn;
 
@@ -126,6 +148,10 @@ private:
     // Command queue
     CommandQueue mCmdQueue;
 
+    // Stream read buffers (populated by event loop thread)
+    std::map<uint64_t, StreamReadBuffer*> mStreamBuffers;
+    pthread_mutex_t mStreamBuffersMutex;  // Protect map access
+
     // Callbacks
     EventCallback mEventCallback;
     void* mUserData;
@@ -140,6 +166,8 @@ private:
     bool setupConnection();
     void flushEgress();
     void processCommands();
+    StreamReadBuffer* getOrCreateStreamBuffer(uint64_t stream_id);
+    void readFromQuicheToBuffer(uint64_t stream_id);
 
     // Static callbacks
     static void* eventLoopThread(void* arg);
