@@ -30,6 +30,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <unistd.h>
+#include <string.h>
 
 #include <fcntl.h>
 #include <errno.h>
@@ -37,6 +38,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
+#include <sys/time.h>
 
 #include <ev.h>
 #include <uthash.h>
@@ -73,6 +75,12 @@ struct conn_io {
     struct sockaddr_storage peer_addr;
     socklen_t peer_addr_len;
 
+    // Data sending tracking
+    uint64_t send_start_time;   // Start time for sending data
+    int send_round;              // Current sending round (0-4 for 5 seconds)
+    uint64_t total_sent;         // Total bytes sent
+    bool sending_started;        // Whether we started sending
+
     UT_hash_handle hh;
 };
 
@@ -84,6 +92,86 @@ static void timeout_cb(EV_P_ ev_timer *w, int revents);
 
 static void debug_log(const char *line, void *argp) {
     fprintf(stderr, "%s\n", line);
+}
+
+// Get current time in milliseconds
+static uint64_t get_time_ms() {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (uint64_t)tv.tv_sec * 1000 + (uint64_t)tv.tv_usec / 1000;
+}
+
+// Send data to client - sends 1.5MB per second for 5 seconds
+static void send_data_to_client(struct conn_io *conn_io) {
+    if (!conn_io->sending_started) {
+        conn_io->sending_started = true;
+        conn_io->send_start_time = get_time_ms();
+        conn_io->send_round = 0;
+        conn_io->total_sent = 0;
+        fprintf(stderr, "=== Starting to send 1.5MB/sec to client for 5 seconds ===\n");
+    }
+
+    uint64_t current_time = get_time_ms();
+    uint64_t elapsed_ms = current_time - conn_io->send_start_time;
+    int current_round = (int)(elapsed_ms / 1000);  // Which second we're in
+
+    // Stop after 5 seconds
+    if (current_round >= 5) {
+        if (conn_io->send_round < 5) {
+            fprintf(stderr, "=== Finished sending data. Total sent: %" PRIu64 " bytes ===\n",
+                    conn_io->total_sent);
+            conn_io->send_round = 5;  // Mark as completed
+        }
+        return;
+    }
+
+    // Send data for all rounds we haven't sent yet
+    while (conn_io->send_round <= current_round && conn_io->send_round < 5) {
+        int round_to_send = conn_io->send_round;
+        conn_io->send_round++;
+
+        // Prepare 1.5MB of data
+        const size_t DATA_SIZE = 1536 * 1024;  // 1.5MB
+        uint8_t *send_buf = malloc(DATA_SIZE);
+        if (!send_buf) {
+            fprintf(stderr, "Failed to allocate send buffer\n");
+            return;
+        }
+
+        // Fill with pattern data
+        for (size_t i = 0; i < DATA_SIZE; i++) {
+            send_buf[i] = (uint8_t)(i % 256);
+        }
+
+        // Send in chunks on stream 4
+        size_t sent_this_round = 0;
+        const size_t CHUNK_SIZE = 65536;  // 64KB chunks
+        uint64_t error_code;
+
+        for (size_t offset = 0; offset < DATA_SIZE; offset += CHUNK_SIZE) {
+            size_t chunk_size = DATA_SIZE - offset;
+            if (chunk_size > CHUNK_SIZE) {
+                chunk_size = CHUNK_SIZE;
+            }
+
+            ssize_t written = quiche_conn_stream_send(conn_io->conn, 4,
+                                                      send_buf + offset,
+                                                      chunk_size, false, &error_code);
+
+            if (written > 0) {
+                sent_this_round += written;
+                conn_io->total_sent += written;
+            } else if (written < 0) {
+                fprintf(stderr, "Failed to send data chunk: %zd\n", written);
+                break;
+            }
+        }
+
+        fprintf(stderr, "✓ Sent %zu bytes to client in round %d (total: %" PRIu64 " bytes)\n",
+                sent_this_round, round_to_send, conn_io->total_sent);
+
+        free(send_buf);
+    }
 }
 
 static void flush_egress(struct ev_loop *loop, struct conn_io *conn_io) {
@@ -379,18 +467,37 @@ static void recv_cb(EV_P_ ev_io *w, int revents) {
 
                 bool fin = false;
                 uint64_t error_code;
-                ssize_t recv_len = quiche_conn_stream_recv(conn_io->conn, s,
-                                                           buf, sizeof(buf),
-                                                           &fin, &error_code);
-                if (recv_len < 0) {
-                    break;
+                uint64_t total_recv = 0;
+
+                // Read all available data from stream
+                while (1) {
+                    ssize_t recv_len = quiche_conn_stream_recv(conn_io->conn, s,
+                                                               buf, sizeof(buf),
+                                                               &fin, &error_code);
+                    if (recv_len < 0) {
+                        break;
+                    }
+
+                    if (recv_len > 0) {
+                        total_recv += recv_len;
+                        fprintf(stderr, "✓ Received %zd bytes on stream %" PRIu64 "\n", recv_len, s);
+                    }
+
+                    if (fin) {
+                        fprintf(stderr, "✓ Client stream %" PRIu64 " finished. Total received: %" PRIu64 " bytes\n",
+                                s, total_recv);
+                        break;
+                    }
+
+                    // No more data available right now
+                    if (recv_len == 0) {
+                        break;
+                    }
                 }
 
-                if (fin) {
-                    static const char *resp = "byez\n";
-                    uint64_t error_code;
-                    quiche_conn_stream_send(conn_io->conn, s, (uint8_t *) resp,
-                                            5, true, &error_code);
+                // If we received data on stream 4, send data back
+                if (s == 4 && total_recv > 0) {
+                    send_data_to_client(conn_io);
                 }
             }
 
@@ -494,12 +601,13 @@ int main(int argc, char *argv[]) {
     quiche_config_set_application_protos(config,
         (uint8_t *) "\x0ahq-interop\x05hq-29\x05hq-28\x05hq-27\x08http/0.9", 38);
 
-    quiche_config_set_max_idle_timeout(config, 5000);
+    // Increased timeouts and limits for high throughput data transfer
+    quiche_config_set_max_idle_timeout(config, 30000);  // 30 seconds
     quiche_config_set_max_recv_udp_payload_size(config, MAX_DATAGRAM_SIZE);
     quiche_config_set_max_send_udp_payload_size(config, MAX_DATAGRAM_SIZE);
-    quiche_config_set_initial_max_data(config, 10000000);
-    quiche_config_set_initial_max_stream_data_bidi_local(config, 1000000);
-    quiche_config_set_initial_max_stream_data_bidi_remote(config, 1000000);
+    quiche_config_set_initial_max_data(config, 100000000);  // 100MB
+    quiche_config_set_initial_max_stream_data_bidi_local(config, 50000000);   // 50MB
+    quiche_config_set_initial_max_stream_data_bidi_remote(config, 50000000);  // 50MB
     quiche_config_set_initial_max_streams_bidi(config, 100);
     quiche_config_set_cc_algorithm(config, QUICHE_CC_RENO);
 

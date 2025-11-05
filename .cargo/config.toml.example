@@ -1,0 +1,127 @@
+# Example Cargo configuration for optimized quiche builds
+# Copy this file to .cargo/config.toml and customize as needed
+
+# =============================================================================
+# BASIC SIZE OPTIMIZATION (Recommended for most users)
+# =============================================================================
+
+[build]
+# Optimize for size on all targets
+rustflags = [
+    "-C", "embed-bitcode=yes",
+]
+
+# =============================================================================
+# LINUX OPTIMIZATION
+# =============================================================================
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = [
+    # Remove unused sections
+    "-C", "link-arg=-Wl,--gc-sections",
+    # Strip all symbols
+    "-C", "link-arg=-Wl,--strip-all",
+    # Only link needed libraries
+    "-C", "link-arg=-Wl,--as-needed",
+]
+
+[target.x86_64-unknown-linux-musl]
+rustflags = [
+    # Static linking for musl
+    "-C", "target-feature=+crt-static",
+    "-C", "link-arg=-static",
+    "-C", "link-arg=-Wl,--gc-sections",
+]
+
+# =============================================================================
+# MACOS OPTIMIZATION
+# =============================================================================
+
+[target.x86_64-apple-darwin]
+rustflags = [
+    # Remove dead code
+    "-C", "link-arg=-dead_strip",
+    # Remove unused dynamic libraries
+    "-C", "link-arg=-Wl,-dead_strip_dylibs",
+]
+
+[target.aarch64-apple-darwin]
+rustflags = [
+    "-C", "link-arg=-dead_strip",
+    # Optimize for Apple Silicon
+    "-C", "target-cpu=apple-m1",
+]
+
+# =============================================================================
+# WINDOWS OPTIMIZATION
+# =============================================================================
+
+[target.x86_64-pc-windows-msvc]
+rustflags = [
+    # Remove unused functions
+    "-C", "link-arg=/OPT:REF",
+    # Merge identical code
+    "-C", "link-arg=/OPT:ICF",
+]
+
+[target.x86_64-pc-windows-gnu]
+rustflags = [
+    "-C", "link-arg=-Wl,--gc-sections",
+    "-C", "link-arg=-Wl,--strip-all",
+]
+
+# =============================================================================
+# ADVANCED: NATIVE CPU OPTIMIZATION (Not portable!)
+# =============================================================================
+# Uncomment to enable native CPU optimizations
+# WARNING: Binary will not work on older CPUs
+
+# [build]
+# rustflags = [
+#     "-C", "target-cpu=native",
+#     "-C", "target-feature=+aes,+avx2,+sse4.2",
+# ]
+
+# =============================================================================
+# ADVANCED: SPECIFIC CPU TARGET (Better portability)
+# =============================================================================
+
+# For modern Intel/AMD CPUs (x86-64-v2: SSE4.2, SSSE3)
+# [build]
+# rustflags = [
+#     "-C", "target-cpu=x86-64-v2",
+# ]
+
+# For newer CPUs (x86-64-v3: AVX2, BMI2)
+# [build]
+# rustflags = [
+#     "-C", "target-cpu=x86-64-v3",
+# ]
+
+# =============================================================================
+# PROFILE-GUIDED OPTIMIZATION (PGO)
+# =============================================================================
+# Step 1: Uncomment to instrument binary
+# [build]
+# rustflags = [
+#     "-C", "profile-generate=/tmp/pgo-data",
+# ]
+
+# Step 2: Run typical workload to collect profiling data
+# Step 3: Merge profiling data (requires llvm-profdata)
+# Step 4: Uncomment to use profiling data
+# [build]
+# rustflags = [
+#     "-C", "profile-use=/tmp/pgo-data/merged.profdata",
+# ]
+
+# =============================================================================
+# CROSS-LANGUAGE LTO (For BoringSSL optimization)
+# =============================================================================
+# Requires clang and lld
+# [target.x86_64-unknown-linux-gnu]
+# linker = "clang"
+# rustflags = [
+#     "-C", "linker-plugin-lto",
+#     "-C", "link-arg=-fuse-ld=lld",
+# ]

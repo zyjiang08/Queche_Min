@@ -216,6 +216,21 @@ fn target_dir_path() -> std::path::PathBuf {
 }
 
 fn main() {
+    // Compile chkstk_darwin.c for iOS/macOS targets to fix __chkstk_darwin undefined symbol
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
+    if target_os == "ios" {
+        println!("cargo:warning=Compiling chkstk_darwin.c for iOS target");
+        println!("cargo:rerun-if-changed=chkstk_darwin.c");
+
+        cc::Build::new()
+            .file("chkstk_darwin.c")
+            .opt_level(2)
+            .warnings(false)
+            .compile("chkstk_darwin");
+
+        println!("cargo:warning=Successfully compiled chkstk_darwin support");
+    }
+
     if cfg!(feature = "boringssl-vendored") &&
         !cfg!(feature = "boringssl-boring-crate") &&
         !cfg!(feature = "openssl")
