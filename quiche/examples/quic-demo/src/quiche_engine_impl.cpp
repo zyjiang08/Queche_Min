@@ -79,52 +79,52 @@ void QuicheEngineImpl::debugLog(const char* line, void* argp) {
 // ============================================================================
 
 QuicheEngineImpl::QuicheEngineImpl(const std::string& h, const std::string& p, const ConfigMap& cfg)
-    : host(h), port(p), config(cfg),
-      quiche_cfg(nullptr), conn(nullptr),
-      sock(-1), local_addr_len(0), peer_addr_len(0),
-      loop(nullptr), thread_started(false),
-      event_callback(nullptr), user_data(nullptr), wrapper(nullptr),
-      is_running(false), is_connected(false)
+    : mHost(h), mPort(p), mConfig(cfg),
+      mQuicheCfg(nullptr), mConn(nullptr),
+      mSock(-1), mLocalAddrLen(0), mPeerAddrLen(0),
+      mLoop(nullptr), mThreadStarted(false),
+      mEventCallback(nullptr), mUserData(nullptr), mWrapper(nullptr),
+      mIsRunning(false), mIsConnected(false)
 {
-    memset(&local_addr, 0, sizeof(local_addr));
-    memset(&peer_addr, 0, sizeof(peer_addr));
+    memset(&mLocalAddr, 0, sizeof(mLocalAddr));
+    memset(&mPeerAddr, 0, sizeof(mPeerAddr));
 }
 
 QuicheEngineImpl::~QuicheEngineImpl() {
-    // Stop event loop if running
-    if (is_running && loop) {
+    // Stop event mLoop if running
+    if (mIsRunning && mLoop) {
         auto* cmd = new Command();
         cmd->type = CommandType::STOP;
-        cmd_queue.push(cmd);
-        ev_async_send(loop, &async_watcher);
+        mCmdQueue.push(cmd);
+        ev_async_send(mLoop, &mAsyncWatcher);
 
-        if (thread_started) {
-            pthread_join(loop_thread, nullptr);
-            thread_started = false;
+        if (mThreadStarted) {
+            pthread_join(mLoopThread, nullptr);
+            mThreadStarted = false;
         }
     }
 
     // Destroy event loop
-    if (loop) {
-        ev_loop_destroy(loop);
-        loop = nullptr;
+    if (mLoop) {
+        ev_loop_destroy(mLoop);
+        mLoop = nullptr;
     }
 
     // Free QUIC objects
-    if (conn) {
-        quiche_conn_free(conn);
-        conn = nullptr;
+    if (mConn) {
+        quiche_conn_free(mConn);
+        mConn = nullptr;
     }
 
-    if (quiche_cfg) {
-        quiche_config_free(quiche_cfg);
-        quiche_cfg = nullptr;
+    if (mQuicheCfg) {
+        quiche_config_free(mQuicheCfg);
+        mQuicheCfg = nullptr;
     }
 
-    // Close socket
-    if (sock >= 0) {
-        ::close(sock);
-        sock = -1;
+    // Close mSocket
+    if (mSock >= 0) {
+        ::close(mSock);
+        mSock = -1;
     }
 }
 
@@ -133,102 +133,102 @@ QuicheEngineImpl::~QuicheEngineImpl() {
 // ============================================================================
 
 bool QuicheEngineImpl::setEventCallback(EventCallback callback, void* ud) {
-    event_callback = callback;
-    user_data = ud;
+    mEventCallback = callback;
+    mUserData = ud;
     return true;
 }
 
 bool QuicheEngineImpl::setupConnection() {
-    // Resolve hostname
+    // Resolve mHostname
     struct addrinfo hints = {};
     hints.ai_family = PF_UNSPEC;
     hints.ai_socktype = SOCK_DGRAM;
     hints.ai_protocol = IPPROTO_UDP;
 
     struct addrinfo* peer;
-    if (getaddrinfo(host.c_str(), port.c_str(), &hints, &peer) != 0) {
-        last_error = "Failed to resolve host: " + host;
+    if (getaddrinfo(mHost.c_str(), mPort.c_str(), &hints, &peer) != 0) {
+        mLastError = "Failed to resolve mHost: " + mHost;
         return false;
     }
 
     // Save peer address
-    peer_addr_len = peer->ai_addrlen;
-    memcpy(&peer_addr, peer->ai_addr, peer->ai_addrlen);
+    mPeerAddrLen = peer->ai_addrlen;
+    memcpy(&mPeerAddr, peer->ai_addr, peer->ai_addrlen);
 
     // Create socket
-    sock = socket(peer->ai_family, SOCK_DGRAM, 0);
-    if (sock < 0) {
-        last_error = "Failed to create socket";
+    mSock = socket(peer->ai_family, SOCK_DGRAM, 0);
+    if (mSock < 0) {
+        mLastError = "Failed to create socket";
         freeaddrinfo(peer);
         return false;
     }
 
-    // Make socket non-blocking
-    if (fcntl(sock, F_SETFL, O_NONBLOCK) != 0) {
-        last_error = "Failed to make socket non-blocking";
-        ::close(sock);
-        sock = -1;
+    // Make mSocket non-blocking
+    if (fcntl(mSock, F_SETFL, O_NONBLOCK) != 0) {
+        mLastError = "Failed to make mSocket non-blocking";
+        ::close(mSock);
+        mSock = -1;
         freeaddrinfo(peer);
         return false;
     }
 
     // Create QUIC config
-    quiche_cfg = quiche_config_new(0xbabababa);
-    if (!quiche_cfg) {
-        last_error = "Failed to create QUIC config";
-        ::close(sock);
-        sock = -1;
+    mQuicheCfg = quiche_config_new(0xbabababa);
+    if (!mQuicheCfg) {
+        mLastError = "Failed to create QUIC config";
+        ::close(mSock);
+        mSock = -1;
         freeaddrinfo(peer);
         return false;
     }
 
     // Set application protocols
-    quiche_config_set_application_protos(quiche_cfg,
+    quiche_config_set_application_protos(mQuicheCfg,
         (const uint8_t*)"\x0ahq-interop\x05hq-29\x05hq-28\x05hq-27\x08http/0.9", 38);
 
     // Apply configuration parameters from map
     uint64_t max_idle_timeout = getConfigValue<uint64_t>(ConfigKey::MAX_IDLE_TIMEOUT, 5000);
-    quiche_config_set_max_idle_timeout(quiche_cfg, max_idle_timeout);
+    quiche_config_set_max_idle_timeout(mQuicheCfg, max_idle_timeout);
 
     uint64_t max_udp_payload = getConfigValue<uint64_t>(ConfigKey::MAX_UDP_PAYLOAD_SIZE, MAX_DATAGRAM_SIZE);
-    quiche_config_set_max_recv_udp_payload_size(quiche_cfg, max_udp_payload);
-    quiche_config_set_max_send_udp_payload_size(quiche_cfg, max_udp_payload);
+    quiche_config_set_max_recv_udp_payload_size(mQuicheCfg, max_udp_payload);
+    quiche_config_set_max_send_udp_payload_size(mQuicheCfg, max_udp_payload);
 
     uint64_t initial_max_data = getConfigValue<uint64_t>(ConfigKey::INITIAL_MAX_DATA, 10000000);
-    quiche_config_set_initial_max_data(quiche_cfg, initial_max_data);
+    quiche_config_set_initial_max_data(mQuicheCfg, initial_max_data);
 
     uint64_t stream_data_bidi_local = getConfigValue<uint64_t>(ConfigKey::INITIAL_MAX_STREAM_DATA_BIDI_LOCAL, 1000000);
-    quiche_config_set_initial_max_stream_data_bidi_local(quiche_cfg, stream_data_bidi_local);
+    quiche_config_set_initial_max_stream_data_bidi_local(mQuicheCfg, stream_data_bidi_local);
 
     uint64_t stream_data_bidi_remote = getConfigValue<uint64_t>(ConfigKey::INITIAL_MAX_STREAM_DATA_BIDI_REMOTE, 1000000);
-    quiche_config_set_initial_max_stream_data_bidi_remote(quiche_cfg, stream_data_bidi_remote);
+    quiche_config_set_initial_max_stream_data_bidi_remote(mQuicheCfg, stream_data_bidi_remote);
 
     uint64_t stream_data_uni = getConfigValue<uint64_t>(ConfigKey::INITIAL_MAX_STREAM_DATA_UNI, 1000000);
-    quiche_config_set_initial_max_stream_data_uni(quiche_cfg, stream_data_uni);
+    quiche_config_set_initial_max_stream_data_uni(mQuicheCfg, stream_data_uni);
 
     uint64_t max_streams_bidi = getConfigValue<uint64_t>(ConfigKey::INITIAL_MAX_STREAMS_BIDI, 100);
-    quiche_config_set_initial_max_streams_bidi(quiche_cfg, max_streams_bidi);
+    quiche_config_set_initial_max_streams_bidi(mQuicheCfg, max_streams_bidi);
 
     uint64_t max_streams_uni = getConfigValue<uint64_t>(ConfigKey::INITIAL_MAX_STREAMS_UNI, 100);
-    quiche_config_set_initial_max_streams_uni(quiche_cfg, max_streams_uni);
+    quiche_config_set_initial_max_streams_uni(mQuicheCfg, max_streams_uni);
 
     bool disable_migration = getConfigValue<bool>(ConfigKey::DISABLE_ACTIVE_MIGRATION, true);
-    quiche_config_set_disable_active_migration(quiche_cfg, disable_migration);
+    quiche_config_set_disable_active_migration(mQuicheCfg, disable_migration);
 
     // Enable SSL key logging if environment variable is set
     if (getenv("SSLKEYLOGFILE")) {
-        quiche_config_log_keys(quiche_cfg);
+        quiche_config_log_keys(mQuicheCfg);
     }
 
-    // Generate connection ID
+    // Generate mConnection ID
     uint8_t scid[LOCAL_CONN_ID_LEN];
     int rng = open("/dev/urandom", O_RDONLY);
     if (rng < 0) {
-        last_error = "Failed to open /dev/urandom";
-        quiche_config_free(quiche_cfg);
-        quiche_cfg = nullptr;
-        ::close(sock);
-        sock = -1;
+        mLastError = "Failed to open /dev/urandom";
+        quiche_config_free(mQuicheCfg);
+        mQuicheCfg = nullptr;
+        ::close(mSock);
+        mSock = -1;
         freeaddrinfo(peer);
         return false;
     }
@@ -237,41 +237,41 @@ bool QuicheEngineImpl::setupConnection() {
     ::close(rng);
 
     if (rand_len < 0) {
-        last_error = "Failed to generate connection ID";
-        quiche_config_free(quiche_cfg);
-        quiche_cfg = nullptr;
-        ::close(sock);
-        sock = -1;
+        mLastError = "Failed to generate mConnection ID";
+        quiche_config_free(mQuicheCfg);
+        mQuicheCfg = nullptr;
+        ::close(mSock);
+        mSock = -1;
         freeaddrinfo(peer);
         return false;
     }
 
     // Get local address
-    local_addr_len = sizeof(local_addr);
-    if (getsockname(sock, (struct sockaddr*)&local_addr, &local_addr_len) != 0) {
-        last_error = "Failed to get local address";
-        quiche_config_free(quiche_cfg);
-        quiche_cfg = nullptr;
-        ::close(sock);
-        sock = -1;
+    mLocalAddrLen = sizeof(mLocalAddr);
+    if (getsockname(mSock, (struct sockaddr*)&mLocalAddr, &mLocalAddrLen) != 0) {
+        mLastError = "Failed to get local address";
+        quiche_config_free(mQuicheCfg);
+        mQuicheCfg = nullptr;
+        ::close(mSock);
+        mSock = -1;
         freeaddrinfo(peer);
         return false;
     }
 
-    // Create QUIC connection
-    conn = quiche_connect(host.c_str(), scid, sizeof(scid),
-                         (struct sockaddr*)&local_addr, local_addr_len,
+    // Create QUIC mConnection
+    mConn = quiche_connect(mHost.c_str(), scid, sizeof(scid),
+                         (struct sockaddr*)&mLocalAddr, mLocalAddrLen,
                          peer->ai_addr, peer->ai_addrlen,
-                         quiche_cfg);
+                         mQuicheCfg);
 
     freeaddrinfo(peer);
 
-    if (!conn) {
-        last_error = "Failed to create QUIC connection";
-        quiche_config_free(quiche_cfg);
-        quiche_cfg = nullptr;
-        ::close(sock);
-        sock = -1;
+    if (!mConn) {
+        mLastError = "Failed to create QUIC mConnection";
+        quiche_config_free(mQuicheCfg);
+        mQuicheCfg = nullptr;
+        ::close(mSock);
+        mSock = -1;
         return false;
     }
 
@@ -283,56 +283,56 @@ void QuicheEngineImpl::flushEgress() {
 
     while (true) {
         quiche_send_info send_info;
-        ssize_t written = quiche_conn_send(conn, out, sizeof(out), &send_info);
+        ssize_t written = quiche_conn_send(mConn, out, sizeof(out), &send_info);
 
         if (written == QUICHE_ERR_DONE) {
             break;
         }
 
         if (written < 0) {
-            last_error = "Failed to create packet";
+            mLastError = "Failed to create packet";
             return;
         }
 
-        ssize_t sent = sendto(sock, out, written, 0,
+        ssize_t sent = sendto(mSock, out, written, 0,
                              (struct sockaddr*)&send_info.to, send_info.to_len);
         if (sent != written) {
             // Ignore send errors for now
         }
     }
 
-    // Update timer
-    uint64_t timeout_ns = quiche_conn_timeout_as_nanos(conn);
+    // Update mTimer
+    uint64_t timeout_ns = quiche_conn_timeout_as_nanos(mConn);
     if (timeout_ns != UINT64_MAX) {
         double timeout_sec = (double)timeout_ns / 1000000000.0;
-        ev_timer_stop(loop, &timer);
-        ev_timer_set(&timer, timeout_sec, 0.0);
-        ev_timer_start(loop, &timer);
+        ev_timer_stop(mLoop, &mTimer);
+        ev_timer_set(&mTimer, timeout_sec, 0.0);
+        ev_timer_start(mLoop, &mTimer);
     }
 
-    // Check if connection is established
-    if (quiche_conn_is_established(conn) && !is_connected) {
-        is_connected = true;
+    // Check if mConnection is established
+    if (quiche_conn_is_established(mConn) && !mIsConnected) {
+        mIsConnected = true;
 
         const uint8_t* app_proto;
         size_t app_proto_len;
-        quiche_conn_application_proto(conn, &app_proto, &app_proto_len);
+        quiche_conn_application_proto(mConn, &app_proto, &app_proto_len);
 
-        if (event_callback) {
+        if (mEventCallback) {
             std::string proto(reinterpret_cast<const char*>(app_proto), app_proto_len);
             EventData data = proto;
-            event_callback(nullptr, EngineEvent::CONNECTED, data, user_data);
+            mEventCallback(nullptr, EngineEvent::CONNECTED, data, mUserData);
         }
     }
 
     // Check for readable streams
-    if (conn) {
-        quiche_stream_iter* readable = quiche_conn_readable(conn);
+    if (mConn) {
+        quiche_stream_iter* readable = quiche_conn_readable(mConn);
         uint64_t stream_id;
         while (quiche_stream_iter_next(readable, &stream_id)) {
-            if (event_callback) {
+            if (mEventCallback) {
                 EventData data = stream_id;
-                event_callback(wrapper, EngineEvent::STREAM_READABLE, data, user_data);
+                mEventCallback(mWrapper, EngineEvent::STREAM_READABLE, data, mUserData);
             }
         }
         quiche_stream_iter_free(readable);
@@ -347,28 +347,28 @@ void QuicheEngineImpl::recvCallback(EV_P_ ev_io* w, int revents) {
     static uint8_t buf[65535];
 
     while (true) {
-        struct sockaddr_storage peer_addr;
-        socklen_t peer_addr_len = sizeof(peer_addr);
+        struct sockaddr_storage mPeerAddr;
+        socklen_t mPeerAddrLen = sizeof(mPeerAddr);
 
-        ssize_t len = recvfrom(impl->sock, buf, sizeof(buf), 0,
-                              (struct sockaddr*)&peer_addr, &peer_addr_len);
+        ssize_t len = recvfrom(impl->mSock, buf, sizeof(buf), 0,
+                              (struct sockaddr*)&mPeerAddr, &mPeerAddrLen);
 
         if (len < 0) {
             if (errno == EWOULDBLOCK || errno == EAGAIN) {
                 break;
             }
-            impl->last_error = "Failed to receive packet";
+            impl->mLastError = "Failed to receive packet";
             break;
         }
 
         quiche_recv_info recv_info = {
-            (struct sockaddr*)&peer_addr,
-            peer_addr_len,
-            (struct sockaddr*)&impl->local_addr,
-            impl->local_addr_len,
+            (struct sockaddr*)&mPeerAddr,
+            mPeerAddrLen,
+            (struct sockaddr*)&impl->mLocalAddr,
+            impl->mLocalAddrLen,
         };
 
-        ssize_t done = quiche_conn_recv(impl->conn, buf, len, &recv_info);
+        ssize_t done = quiche_conn_recv(impl->mConn, buf, len, &recv_info);
         if (done < 0) {
             // Ignore receive errors
         }
@@ -376,10 +376,10 @@ void QuicheEngineImpl::recvCallback(EV_P_ ev_io* w, int revents) {
 
     impl->flushEgress();
 
-    if (quiche_conn_is_closed(impl->conn)) {
-        if (impl->event_callback) {
+    if (quiche_conn_is_closed(impl->mConn)) {
+        if (impl->mEventCallback) {
             EventData data = std::monostate{};
-            impl->event_callback(nullptr, EngineEvent::CONNECTION_CLOSED, data, impl->user_data);
+            impl->mEventCallback(nullptr, EngineEvent::CONNECTION_CLOSED, data, impl->mUserData);
         }
         ev_break(EV_A_ EVBREAK_ONE);
     }
@@ -390,13 +390,13 @@ void QuicheEngineImpl::timeoutCallback(EV_P_ ev_timer* w, int revents) {
 
     QuicheEngineImpl* impl = static_cast<QuicheEngineImpl*>(w->data);
 
-    quiche_conn_on_timeout(impl->conn);
+    quiche_conn_on_timeout(impl->mConn);
     impl->flushEgress();
 
-    if (quiche_conn_is_closed(impl->conn)) {
-        if (impl->event_callback) {
+    if (quiche_conn_is_closed(impl->mConn)) {
+        if (impl->mEventCallback) {
             EventData data = std::monostate{};
-            impl->event_callback(nullptr, EngineEvent::CONNECTION_CLOSED, data, impl->user_data);
+            impl->mEventCallback(nullptr, EngineEvent::CONNECTION_CLOSED, data, impl->mUserData);
         }
         ev_break(EV_A_ EVBREAK_ONE);
     }
@@ -412,13 +412,13 @@ void QuicheEngineImpl::asyncCallback(EV_P_ ev_async* w, int revents) {
 
 void QuicheEngineImpl::processCommands() {
     Command* cmd;
-    while ((cmd = cmd_queue.pop()) != nullptr) {
+    while ((cmd = mCmdQueue.pop()) != nullptr) {
         switch (cmd->type) {
             case CommandType::WRITE: {
-                if (conn) {
+                if (mConn) {
                     uint64_t error_code;
                     ssize_t written = quiche_conn_stream_send(
-                        conn,
+                        mConn,
                         cmd->params.write.stream_id,
                         cmd->params.write.data,
                         cmd->params.write.len,
@@ -436,9 +436,9 @@ void QuicheEngineImpl::processCommands() {
             }
 
             case CommandType::CLOSE: {
-                if (conn) {
+                if (mConn) {
                     quiche_conn_close(
-                        conn,
+                        mConn,
                         true,
                         cmd->params.close.error_code,
                         reinterpret_cast<const uint8_t*>(cmd->params.close.reason),
@@ -450,7 +450,7 @@ void QuicheEngineImpl::processCommands() {
             }
 
             case CommandType::STOP: {
-                ev_break(loop, EVBREAK_ONE);
+                ev_break(mLoop, EVBREAK_ONE);
                 break;
             }
         }
@@ -461,14 +461,14 @@ void QuicheEngineImpl::processCommands() {
 
 void* QuicheEngineImpl::eventLoopThread(void* arg) {
     QuicheEngineImpl* impl = static_cast<QuicheEngineImpl*>(arg);
-    ev_run(impl->loop, 0);
-    impl->is_running = false;
+    ev_run(impl->mLoop, 0);
+    impl->mIsRunning = false;
     return nullptr;
 }
 
-bool QuicheEngineImpl::run() {
-    if (thread_started) {
-        last_error = "Engine already running";
+bool QuicheEngineImpl::start() {
+    if (mThreadStarted) {
+        mLastError = "Engine already running";
         return false;
     }
 
@@ -478,70 +478,80 @@ bool QuicheEngineImpl::run() {
         quiche_enable_debug_logging(debugLog, nullptr);
     }
 
-    // Setup connection
+    // Setup mConnection
     if (!setupConnection()) {
         return false;
     }
 
-    // Create event loop
-    loop = ev_loop_new(EVFLAG_AUTO);
-    if (!loop) {
-        last_error = "Failed to create event loop";
+    // Create event mLoop
+    mLoop = ev_loop_new(EVFLAG_AUTO);
+    if (!mLoop) {
+        mLastError = "Failed to create event mLoop";
         return false;
     }
 
     // Initialize IO watcher
-    ev_io_init(&io_watcher, recvCallback, sock, EV_READ);
-    ev_io_start(loop, &io_watcher);
-    io_watcher.data = this;
+    ev_io_init(&mIoWatcher, recvCallback, mSock, EV_READ);
+    ev_io_start(mLoop, &mIoWatcher);
+    mIoWatcher.data = this;
 
-    // Initialize timer
-    ev_init(&timer, timeoutCallback);
-    timer.data = this;
+    // Initialize mTimer
+    ev_init(&mTimer, timeoutCallback);
+    mTimer.data = this;
 
     // Initialize async watcher
-    ev_async_init(&async_watcher, asyncCallback);
-    ev_async_start(loop, &async_watcher);
-    async_watcher.data = this;
+    ev_async_init(&mAsyncWatcher, asyncCallback);
+    ev_async_start(mLoop, &mAsyncWatcher);
+    mAsyncWatcher.data = this;
 
     // Send initial packet
     flushEgress();
 
-    // Start event loop in background thread
-    is_running = true;
-    if (pthread_create(&loop_thread, nullptr, eventLoopThread, this) != 0) {
-        last_error = "Failed to create event loop thread";
-        is_running = false;
-        ev_loop_destroy(loop);
-        loop = nullptr;
+    // Start event mLoop in background thread
+    mIsRunning = true;
+    if (pthread_create(&mLoopThread, nullptr, eventLoopThread, this) != 0) {
+        mLastError = "Failed to create event mLoop thread";
+        mIsRunning = false;
+        ev_loop_destroy(mLoop);
+        mLoop = nullptr;
         return false;
     }
 
-    thread_started = true;
+    mThreadStarted = true;
     return true;
 }
 
-bool QuicheEngineImpl::join() {
-    if (!thread_started) {
-        return false;
+void QuicheEngineImpl::shutdown(uint64_t app_error, const std::string& reason) {
+    // Send close command to event mLoop
+    if (mIsRunning && mLoop) {
+        auto* cmd = new Command();
+        cmd->type = CommandType::CLOSE;
+        cmd->params.close.error_code = app_error;
+
+        strncpy(cmd->params.close.reason, reason.c_str(), sizeof(cmd->params.close.reason) - 1);
+        cmd->params.close.reason[sizeof(cmd->params.close.reason) - 1] = '\0';
+
+        mCmdQueue.push(cmd);
+        ev_async_send(mLoop, &mAsyncWatcher);
     }
 
-    pthread_join(loop_thread, nullptr);
-    thread_started = false;
-    return true;
-}
-
-void QuicheEngineImpl::stop() {
-    if (!is_running || !loop) {
-        return;
+    // Break event mLoop
+    if (mIsRunning && mLoop) {
+        ev_break(mLoop, EVBREAK_ONE);
     }
 
-    ev_break(loop, EVBREAK_ONE);
+    // Wait for thread to complete
+    if (mThreadStarted) {
+        pthread_join(mLoopThread, nullptr);
+        mThreadStarted = false;
+    }
+
+    mIsRunning = false;
 }
 
 ssize_t QuicheEngineImpl::write(uint64_t stream_id, const uint8_t* data, size_t len, bool fin) {
     if (!data || len > MAX_WRITE_DATA_SIZE) {
-        last_error = "Invalid write parameters";
+        mLastError = "Invalid write parameters";
         return -1;
     }
 
@@ -552,24 +562,24 @@ ssize_t QuicheEngineImpl::write(uint64_t stream_id, const uint8_t* data, size_t 
     cmd->params.write.len = len;
     cmd->params.write.fin = fin;
 
-    cmd_queue.push(cmd);
+    mCmdQueue.push(cmd);
 
-    if (loop) {
-        ev_async_send(loop, &async_watcher);
+    if (mLoop) {
+        ev_async_send(mLoop, &mAsyncWatcher);
     }
 
     return static_cast<ssize_t>(len);
 }
 
 ssize_t QuicheEngineImpl::read(uint64_t stream_id, uint8_t* buf, size_t buf_len, bool& fin) {
-    if (!conn || !buf) {
-        last_error = "Invalid connection or buffer";
+    if (!mConn || !buf) {
+        mLastError = "Invalid mConnection or buffer";
         return -1;
     }
 
     bool local_fin = false;
     uint64_t error_code;
-    ssize_t read_len = quiche_conn_stream_recv(conn, stream_id, buf, buf_len,
+    ssize_t read_len = quiche_conn_stream_recv(mConn, stream_id, buf, buf_len,
                                                 &local_fin, &error_code);
 
     fin = local_fin;
@@ -586,34 +596,18 @@ ssize_t QuicheEngineImpl::read(uint64_t stream_id, uint8_t* buf, size_t buf_len,
         return 0;  // Stream not ready yet (non-fatal)
     } else {
         // Fatal errors
-        last_error = "Stream recv error: " + std::to_string(read_len);
+        mLastError = "Stream recv error: " + std::to_string(read_len);
         return -1;
     }
 }
 
-bool QuicheEngineImpl::close(uint64_t app_error, const std::string& reason) {
-    auto* cmd = new Command();
-    cmd->type = CommandType::CLOSE;
-    cmd->params.close.error_code = app_error;
-
-    strncpy(cmd->params.close.reason, reason.c_str(), sizeof(cmd->params.close.reason) - 1);
-    cmd->params.close.reason[sizeof(cmd->params.close.reason) - 1] = '\0';
-
-    cmd_queue.push(cmd);
-
-    if (loop) {
-        ev_async_send(loop, &async_watcher);
-    }
-
-    return true;
-}
 
 EngineStats QuicheEngineImpl::getStats() const {
     EngineStats stats = {};
 
-    if (conn) {
+    if (mConn) {
         quiche_stats s;
-        quiche_conn_stats(conn, &s);
+        quiche_conn_stats(mConn, &s);
 
         stats.packets_sent = s.sent;
         stats.packets_received = s.recv;
@@ -624,7 +618,7 @@ EngineStats QuicheEngineImpl::getStats() const {
         // Get path stats for RTT and CWND (from path 0)
         if (s.paths_count > 0) {
             quiche_path_stats ps;
-            if (quiche_conn_path_stats(conn, 0, &ps) == 0) {
+            if (quiche_conn_path_stats(mConn, 0, &ps) == 0) {
                 stats.rtt_ns = ps.rtt;
                 stats.cwnd = ps.cwnd;
             }

@@ -132,56 +132,36 @@ public:
      * @return Number of bytes written, or -1 on error
      */
     ssize_t write(uint64_t stream_id, const uint8_t* data, size_t len, bool fin);
-
-    /**
-     * Write data to a stream (thread-safe, string overload)
-     */
-    ssize_t write(uint64_t stream_id, const std::string& data, bool fin);
+    
 
     /**
      * Read data from a stream
-     * Should be called from event callback context
+     * Can be called from any thread (thread-safe)
      *
      * @param stream_id Stream ID
      * @param buf Buffer to read into
      * @param buf_len Buffer length
      * @param fin Output: set to true if this is final data
-     * @return Number of bytes read, 0 if no data, -1 on error
+     * @return Number of bytes read, 0 if no data available, -1 on fatal error
      */
     ssize_t read(uint64_t stream_id, uint8_t* buf, size_t buf_len, bool& fin);
 
     /**
-     * Read data from a stream (string overload)
-     */
-    std::string read(uint64_t stream_id, bool& fin);
-
-    /**
-     * Start the event loop in background thread (non-blocking)
+     * Start the engine - begins connection and event loop (non-blocking)
+     * Returns immediately after starting background thread
      *
      * @return true on success, false on failure
      */
-    bool run();
+    bool start();
 
     /**
-     * Wait for event loop thread to finish (blocking)
+     * Shutdown the engine - closes connection and stops event loop (blocking)
+     * Waits for graceful shutdown to complete
      *
-     * @return true on success, false on failure
+     * @param app_error Application error code (default: 0)
+     * @param reason Reason string for close (default: empty)
      */
-    bool join();
-
-    /**
-     * Stop the event loop
-     */
-    void stop();
-
-    /**
-     * Close the connection (thread-safe)
-     *
-     * @param app_error Application error code
-     * @param reason Reason string (optional)
-     * @return true on success, false on failure
-     */
-    bool close(uint64_t app_error = 0, const std::string& reason = "");
+    void shutdown(uint64_t app_error = 0, const std::string& reason = "");
 
     /**
      * Check if connection is established
@@ -204,7 +184,7 @@ public:
     std::string getLastError() const;
 
 private:
-    QuicheEngineImpl* pImpl;
+    QuicheEngineImpl* mPImpl;
 };
 
 } // namespace quiche

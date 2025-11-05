@@ -258,7 +258,7 @@ int main(int argc, char* argv[]) {
 
         // Start the engine (non-blocking, runs in background thread)
         std::cout << "Starting event loop..." << std::endl << std::endl;
-        if (!engine.run()) {
+        if (!engine.start()) {
             std::cerr << "\n✗ Engine error: " << engine.getLastError() << std::endl;
             return 1;
         }
@@ -282,9 +282,6 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Close connection
-        engine.close(0, "Test completed");
-
         // Wait for threads to finish
         if (receiver_thread.joinable()) {
             receiver_thread.join();
@@ -293,8 +290,8 @@ int main(int argc, char* argv[]) {
             sender_thread.join();
         }
 
-        // Wait a bit for clean shutdown
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        // Shutdown the engine (blocking, waits for graceful shutdown)
+        engine.shutdown(0, "Test completed");
 
         // Clean up (automatic with destructor)
         std::cout << "\nCleaning up..." << std::endl;

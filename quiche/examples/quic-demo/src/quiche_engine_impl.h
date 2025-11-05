@@ -87,56 +87,54 @@ public:
     QuicheEngineImpl& operator=(const QuicheEngineImpl&) = delete;
 
     // Public API implementation
-    void setWrapper(QuicheEngine* w) { wrapper = w; }
+    void setWrapper(QuicheEngine* w) { mWrapper = w; }
     bool setEventCallback(EventCallback callback, void* user_data);
     ssize_t write(uint64_t stream_id, const uint8_t* data, size_t len, bool fin);
     ssize_t read(uint64_t stream_id, uint8_t* buf, size_t buf_len, bool& fin);
-    bool run();
-    bool join();
-    void stop();
-    bool close(uint64_t app_error, const std::string& reason);
-    bool isConnected() const { return is_connected; }
-    bool isRunning() const { return is_running; }
+    bool start();
+    void shutdown(uint64_t app_error, const std::string& reason);
+    bool isConnected() const { return mIsConnected; }
+    bool isRunning() const { return mIsRunning; }
     EngineStats getStats() const;
-    std::string getLastError() const { return last_error; }
+    std::string getLastError() const { return mLastError; }
 
 private:
     // Configuration
-    std::string host;
-    std::string port;
-    ConfigMap config;
+    std::string mHost;
+    std::string mPort;
+    ConfigMap mConfig;
 
     // QUIC objects
-    quiche_config* quiche_cfg;
-    quiche_conn* conn;
+    quiche_config* mQuicheCfg;
+    quiche_conn* mConn;
 
     // Network
-    int sock;
-    struct sockaddr_storage local_addr;
-    socklen_t local_addr_len;
-    struct sockaddr_storage peer_addr;
-    socklen_t peer_addr_len;
+    int mSock;
+    struct sockaddr_storage mLocalAddr;
+    socklen_t mLocalAddrLen;
+    struct sockaddr_storage mPeerAddr;
+    socklen_t mPeerAddrLen;
 
     // Event loop
-    struct ev_loop* loop;
-    ev_io io_watcher;
-    ev_timer timer;
-    ev_async async_watcher;
-    pthread_t loop_thread;
-    bool thread_started;
+    struct ev_loop* mLoop;
+    ev_io mIoWatcher;
+    ev_timer mTimer;
+    ev_async mAsyncWatcher;
+    pthread_t mLoopThread;
+    bool mThreadStarted;
 
     // Command queue
-    CommandQueue cmd_queue;
+    CommandQueue mCmdQueue;
 
     // Callbacks
-    EventCallback event_callback;
-    void* user_data;
-    QuicheEngine* wrapper;  // Pointer back to wrapper for event callbacks
+    EventCallback mEventCallback;
+    void* mUserData;
+    QuicheEngine* mWrapper;  // Pointer back to wrapper for event callbacks
 
     // State
-    bool is_running;
-    bool is_connected;
-    std::string last_error;
+    bool mIsRunning;
+    bool mIsConnected;
+    std::string mLastError;
 
     // Helper methods
     bool setupConnection();
@@ -153,8 +151,8 @@ private:
     // Config helper
     template<typename T>
     T getConfigValue(ConfigKey key, T default_value) const {
-        auto it = config.find(key);
-        if (it != config.end()) {
+        auto it = mConfig.find(key);
+        if (it != mConfig.end()) {
             try {
                 return std::get<T>(it->second);
             } catch (const std::bad_variant_access&) {

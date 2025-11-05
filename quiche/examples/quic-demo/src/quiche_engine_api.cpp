@@ -14,13 +14,13 @@ namespace quiche {
 // ============================================================================
 
 QuicheEngine::QuicheEngine(const std::string& host, const std::string& port, const ConfigMap& config)
-    : pImpl(new QuicheEngineImpl(host, port, config))
+    : mPImpl(new QuicheEngineImpl(host, port, config))
 {
-    pImpl->setWrapper(this);
+    mPImpl->setWrapper(this);
 }
 
 QuicheEngine::~QuicheEngine() {
-    delete pImpl;
+    delete mPImpl;
 }
 
 // ============================================================================
@@ -28,16 +28,16 @@ QuicheEngine::~QuicheEngine() {
 // ============================================================================
 
 QuicheEngine::QuicheEngine(QuicheEngine&& other) noexcept
-    : pImpl(other.pImpl)
+    : mPImpl(other.mPImpl)
 {
-    other.pImpl = nullptr;
+    other.mPImpl = nullptr;
 }
 
 QuicheEngine& QuicheEngine::operator=(QuicheEngine&& other) noexcept {
     if (this != &other) {
-        delete pImpl;
-        pImpl = other.pImpl;
-        other.pImpl = nullptr;
+        delete mPImpl;
+        mPImpl = other.mPImpl;
+        other.mPImpl = nullptr;
     }
     return *this;
 }
@@ -47,60 +47,39 @@ QuicheEngine& QuicheEngine::operator=(QuicheEngine&& other) noexcept {
 // ============================================================================
 
 bool QuicheEngine::setEventCallback(EventCallback callback, void* user_data) {
-    return pImpl->setEventCallback(callback, user_data);
+    return mPImpl->setEventCallback(callback, user_data);
 }
 
 ssize_t QuicheEngine::write(uint64_t stream_id, const uint8_t* data, size_t len, bool fin) {
-    return pImpl->write(stream_id, data, len, fin);
-}
-
-ssize_t QuicheEngine::write(uint64_t stream_id, const std::string& data, bool fin) {
-    return pImpl->write(stream_id, reinterpret_cast<const uint8_t*>(data.c_str()), data.size(), fin);
+    return mPImpl->write(stream_id, data, len, fin);
 }
 
 ssize_t QuicheEngine::read(uint64_t stream_id, uint8_t* buf, size_t buf_len, bool& fin) {
-    return pImpl->read(stream_id, buf, buf_len, fin);
+    return mPImpl->read(stream_id, buf, buf_len, fin);
 }
 
-std::string QuicheEngine::read(uint64_t stream_id, bool& fin) {
-    uint8_t buf[65535];
-    ssize_t len = pImpl->read(stream_id, buf, sizeof(buf), fin);
-    if (len > 0) {
-        return std::string(reinterpret_cast<char*>(buf), len);
-    }
-    return "";
+bool QuicheEngine::start() {
+    return mPImpl->start();
 }
 
-bool QuicheEngine::run() {
-    return pImpl->run();
-}
-
-bool QuicheEngine::join() {
-    return pImpl->join();
-}
-
-void QuicheEngine::stop() {
-    pImpl->stop();
-}
-
-bool QuicheEngine::close(uint64_t app_error, const std::string& reason) {
-    return pImpl->close(app_error, reason);
+void QuicheEngine::shutdown(uint64_t app_error, const std::string& reason) {
+    mPImpl->shutdown(app_error, reason);
 }
 
 bool QuicheEngine::isConnected() const {
-    return pImpl->isConnected();
+    return mPImpl->isConnected();
 }
 
 bool QuicheEngine::isRunning() const {
-    return pImpl->isRunning();
+    return mPImpl->isRunning();
 }
 
 EngineStats QuicheEngine::getStats() const {
-    return pImpl->getStats();
+    return mPImpl->getStats();
 }
 
 std::string QuicheEngine::getLastError() const {
-    return pImpl->getLastError();
+    return mPImpl->getLastError();
 }
 
 } // namespace quiche
