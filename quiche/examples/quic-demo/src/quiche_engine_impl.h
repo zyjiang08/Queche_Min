@@ -7,6 +7,7 @@
 #include <memory>
 #include <map>
 #include <vector>
+#include <mutex>
 
 extern "C" {
 #include <sys/types.h>
@@ -75,7 +76,7 @@ public:
 private:
     Command* head;
     Command* tail;
-    pthread_mutex_t mutex;
+    std::mutex mMutex;  // C++ mutex (non-recursive)
 };
 
 // Per-stream read buffer (populated by event loop, read by application threads)
@@ -83,15 +84,11 @@ struct StreamReadBuffer {
     std::vector<uint8_t> data;
     size_t read_offset;
     bool fin_received;
-    pthread_mutex_t mutex;
+    std::mutex mMutex;  // C++ mutex (non-recursive)
 
-    StreamReadBuffer() : read_offset(0), fin_received(false) {
-        pthread_mutex_init(&mutex, nullptr);
-    }
+    StreamReadBuffer() : read_offset(0), fin_received(false) {}
 
-    ~StreamReadBuffer() {
-        pthread_mutex_destroy(&mutex);
-    }
+    ~StreamReadBuffer() = default;
 
     // Disable copy
     StreamReadBuffer(const StreamReadBuffer&) = delete;
@@ -150,7 +147,7 @@ private:
 
     // Stream read buffers (populated by event loop thread)
     std::map<uint64_t, StreamReadBuffer*> mStreamBuffers;
-    pthread_mutex_t mStreamBuffersMutex;  // Protect map access
+    std::mutex mStreamBuffersMutex;  // Protect map access (C++ mutex, non-recursive)
 
     // Callbacks
     EventCallback mEventCallback;

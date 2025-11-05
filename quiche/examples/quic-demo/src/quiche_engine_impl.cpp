@@ -20,28 +20,27 @@ namespace quiche {
 CommandQueue::CommandQueue()
     : head(nullptr), tail(nullptr)
 {
-    pthread_mutex_init(&mutex, nullptr);
+    // std::mutex default constructor - no initialization needed
 }
 
 CommandQueue::~CommandQueue() {
     clear();
-    pthread_mutex_destroy(&mutex);
+    // std::mutex destructor called automatically
 }
 
 void CommandQueue::push(Command* cmd) {
     cmd->next = nullptr;
-    pthread_mutex_lock(&mutex);
+    std::lock_guard<std::mutex> lock(mMutex);
     if (tail) {
         tail->next = cmd;
     } else {
         head = cmd;
     }
     tail = cmd;
-    pthread_mutex_unlock(&mutex);
 }
 
 Command* CommandQueue::pop() {
-    pthread_mutex_lock(&mutex);
+    std::lock_guard<std::mutex> lock(mMutex);
     Command* cmd = head;
     if (cmd) {
         head = cmd->next;
@@ -50,19 +49,17 @@ Command* CommandQueue::pop() {
         }
         cmd->next = nullptr;
     }
-    pthread_mutex_unlock(&mutex);
     return cmd;
 }
 
 void CommandQueue::clear() {
-    pthread_mutex_lock(&mutex);
+    std::lock_guard<std::mutex> lock(mMutex);
     while (head) {
         Command* next = head->next;
         delete head;
         head = next;
     }
     tail = nullptr;
-    pthread_mutex_unlock(&mutex);
 }
 
 // ============================================================================
@@ -89,8 +86,7 @@ QuicheEngineImpl::QuicheEngineImpl(const std::string& h, const std::string& p, c
     memset(&mLocalAddr, 0, sizeof(mLocalAddr));
     memset(&mPeerAddr, 0, sizeof(mPeerAddr));
 
-    // Initialize stream buffers mutex
-    pthread_mutex_init(&mStreamBuffersMutex, nullptr);
+    // std::mutex default constructor - no initialization needed
 }
 
 QuicheEngineImpl::~QuicheEngineImpl() {
@@ -131,15 +127,14 @@ QuicheEngineImpl::~QuicheEngineImpl() {
     }
 
     // Clean up stream buffers
-    pthread_mutex_lock(&mStreamBuffersMutex);
-    for (auto& pair : mStreamBuffers) {
-        delete pair.second;
+    {
+        std::lock_guard<std::mutex> lock(mStreamBuffersMutex);
+        for (auto& pair : mStreamBuffers) {
+            delete pair.second;
+        }
+        mStreamBuffers.clear();
     }
-    mStreamBuffers.clear();
-    pthread_mutex_unlock(&mStreamBuffersMutex);
-
-    // Destroy mutex
-    pthread_mutex_destroy(&mStreamBuffersMutex);
+    // std::mutex destructor called automatically
 }
 
 // ============================================================================
@@ -613,7 +608,7 @@ ssize_t QuicheEngineImpl::read(uint64_t stream_id, uint8_t* buf, size_t buf_len,
     StreamReadBuffer* buffer = getOrCreateStreamBuffer(stream_id);
 
     // Lock buffer access (not mConn - much lighter weight)
-    pthread_mutex_lock(&buffer->mutex);
+    std::lock_guard<std::mutex> lock(buffer->mMutex);
 
     // Calculate available data
     size_t available = buffer->data.size() - buffer->read_offset;
@@ -621,7 +616,6 @@ ssize_t QuicheEngineImpl::read(uint64_t stream_id, uint8_t* buf, size_t buf_len,
     if (available == 0) {
         // No data available yet
         fin = buffer->fin_received;
-        pthread_mutex_unlock(&buffer->mutex);
         return 0;
     }
 
@@ -632,8 +626,6 @@ ssize_t QuicheEngineImpl::read(uint64_t stream_id, uint8_t* buf, size_t buf_len,
 
     // Check if FIN received and all data consumed
     fin = buffer->fin_received && (buffer->read_offset >= buffer->data.size());
-
-    pthread_mutex_unlock(&buffer->mutex);
 
     return static_cast<ssize_t>(to_read);
 }
@@ -675,11 +667,10 @@ EngineStats QuicheEngineImpl::getStats() const {
 // ============================================================================
 
 StreamReadBuffer* QuicheEngineImpl::getOrCreateStreamBuffer(uint64_t stream_id) {
-    pthread_mutex_lock(&mStreamBuffersMutex);
+    std::lock_guard<std::mutex> lock(mStreamBuffersMutex);
 
     auto it = mStreamBuffers.find(stream_id);
     if (it != mStreamBuffers.end()) {
-        pthread_mutex_unlock(&mStreamBuffersMutex);
         return it->second;
     }
 
@@ -687,7 +678,6 @@ StreamReadBuffer* QuicheEngineImpl::getOrCreateStreamBuffer(uint64_t stream_id) 
     StreamReadBuffer* buffer = new StreamReadBuffer();
     mStreamBuffers[stream_id] = buffer;
 
-    pthread_mutex_unlock(&mStreamBuffersMutex);
     return buffer;
 }
 
@@ -710,12 +700,13 @@ void QuicheEngineImpl::readFromQuicheToBuffer(uint64_t stream_id) {
     }
 
     // Append to buffer
-    pthread_mutex_lock(&buffer->mutex);
-    buffer->data.insert(buffer->data.end(), temp_buf, temp_buf + read_len);
-    if (local_fin) {
-        buffer->fin_received = true;
+    {
+        std::lock_guard<std::mutex> lock(buffer->mMutex);
+        buffer->data.insert(buffer->data.end(), temp_buf, temp_buf + read_len);
+        if (local_fin) {
+            buffer->fin_received = true;
+        }
     }
-    pthread_mutex_unlock(&buffer->mutex);
 }
 
 } // namespace quiche
