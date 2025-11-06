@@ -289,10 +289,10 @@ build_macos() {
         echo_info "You can verify symbols with: llvm-nm or otool"
     fi
 
-    # Copy header files (only once)
-    if [ ! -d "${OUTPUT_DIR}/macos/include" ]; then
-        cp -r quiche/engine/include "${OUTPUT_DIR}/macos/"
-        echo_info "Headers copied to: ${OUTPUT_DIR}/macos/include/"
+    # Copy header files (only once, shared by all platforms)
+    if [ ! -d "${OUTPUT_DIR}/include" ]; then
+        cp -r quiche/engine/include "${OUTPUT_DIR}/"
+        echo_info "Headers copied to: ${OUTPUT_DIR}/include/"
     fi
 
     return 0
@@ -466,10 +466,10 @@ CARGO_CONFIG
         readelf -d "${OUTPUT_DIR}/android/${abi}/libquiche_engine.so" | grep NEEDED || true
     fi
 
-    # Copy header files (only once)
-    if [ ! -d "${OUTPUT_DIR}/android/include" ]; then
-        cp -r quiche/engine/include "${OUTPUT_DIR}/android/"
-        echo_info "Headers copied to: ${OUTPUT_DIR}/android/include/"
+    # Copy header files (only once, shared by all platforms)
+    if [ ! -d "${OUTPUT_DIR}/include" ]; then
+        cp -r quiche/engine/include "${OUTPUT_DIR}/"
+        echo_info "Headers copied to: ${OUTPUT_DIR}/include/"
     fi
 
     return 0
