@@ -9,6 +9,7 @@ extern "C" {
 #include <fcntl.h>
 #include <errno.h>
 #include <netdb.h>
+#include <netinet/in.h>  // For IPPROTO_UDP on Android
 }
 
 namespace quiche {

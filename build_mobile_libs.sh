@@ -267,6 +267,28 @@ build_android() {
     # Set environment variables for Android build
     export ANDROID_API_LEVEL=21
 
+    # Determine NDK toolchain paths
+    local HOST_TAG="darwin-x86_64"  # macOS
+    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        HOST_TAG="linux-x86_64"
+    fi
+
+    local NDK_BIN="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/${HOST_TAG}/bin"
+
+    # Convert target triple to underscore format for environment variables
+    # e.g., aarch64-linux-android -> aarch64_linux_android
+    local target_underscores=$(echo "$target" | tr '-' '_')
+
+    # Set CC, CXX, and AR for this target so cc-rs can find them
+    # The NDK compilers are named with API levels, e.g., aarch64-linux-android21-clang
+    export CC_${target_underscores}="${NDK_BIN}/${toolchain}${ANDROID_API_LEVEL}-clang"
+    export CXX_${target_underscores}="${NDK_BIN}/${toolchain}${ANDROID_API_LEVEL}-clang++"
+    export AR_${target_underscores}="${NDK_BIN}/${target}-ar"
+
+    echo_info "Using CC: ${NDK_BIN}/${toolchain}${ANDROID_API_LEVEL}-clang"
+    echo_info "Using CXX: ${NDK_BIN}/${toolchain}${ANDROID_API_LEVEL}-clang++"
+    echo_info "Using AR: ${NDK_BIN}/${target}-ar"
+
     # Build quiche for Android
     cargo build --lib --release --target "$target" --features cpp-engine
 
@@ -298,13 +320,8 @@ build_android() {
             return 1
         fi
 
-        # Determine NDK compiler path based on host OS
-        local HOST_TAG="darwin-x86_64"  # macOS
-        if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-            HOST_TAG="linux-x86_64"
-        fi
-
-        NDK_COMPILER="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/${HOST_TAG}/bin/${toolchain}${ANDROID_API_LEVEL}-clang++"
+        # Use the NDK compiler path we set earlier
+        NDK_COMPILER="${NDK_BIN}/${toolchain}${ANDROID_API_LEVEL}-clang++"
 
         if [ ! -f "$NDK_COMPILER" ]; then
             echo_error "NDK compiler not found: $NDK_COMPILER"
@@ -540,39 +557,77 @@ main() {
             exit 1
         fi
 
-        # Define all Android architectures
-        declare -A ANDROID_TARGETS=(
-            ["aarch64-linux-android"]="arm64-v8a|aarch64-linux-android"
-            ["armv7-linux-androideabi"]="armeabi-v7a|armv7a-linux-androideabi"
-            ["i686-linux-android"]="x86|i686-linux-android"
-            ["x86_64-linux-android"]="x86_64|x86_64-linux-android"
-        )
+        # Helper function to get target from ABI
+        get_android_target() {
+            local abi=$1
+            case $abi in
+                arm64-v8a)
+                    echo "aarch64-linux-android"
+                    ;;
+                armeabi-v7a)
+                    echo "armv7-linux-androideabi"
+                    ;;
+                x86)
+                    echo "i686-linux-android"
+                    ;;
+                x86_64)
+                    echo "x86_64-linux-android"
+                    ;;
+                *)
+                    echo ""
+                    ;;
+            esac
+        }
 
-        # Map ABI to target
-        declare -A ABI_TO_TARGET=(
-            ["arm64-v8a"]="aarch64-linux-android"
-            ["armeabi-v7a"]="armv7-linux-androideabi"
-            ["x86"]="i686-linux-android"
-            ["x86_64"]="x86_64-linux-android"
-        )
+        # Helper function to get toolchain from target
+        get_android_toolchain() {
+            local target=$1
+            case $target in
+                aarch64-linux-android)
+                    echo "aarch64-linux-android"
+                    ;;
+                armv7-linux-androideabi)
+                    echo "armv7a-linux-androideabi"
+                    ;;
+                i686-linux-android)
+                    echo "i686-linux-android"
+                    ;;
+                x86_64-linux-android)
+                    echo "x86_64-linux-android"
+                    ;;
+                *)
+                    echo ""
+                    ;;
+            esac
+        }
 
         # If specific architecture is requested
         if [ -n "$ANDROID_ARCH" ]; then
             echo_info "Building Android $ANDROID_ARCH only..."
-            target="${ABI_TO_TARGET[$ANDROID_ARCH]}"
-            IFS='|' read -r abi toolchain <<< "${ANDROID_TARGETS[$target]}"
+            target=$(get_android_target "$ANDROID_ARCH")
+            toolchain=$(get_android_toolchain "$target")
 
-            if build_android "$target" "$target" "$abi" "$toolchain"; then
-                echo_info "✓ Android $abi build successful"
+            if [ -z "$target" ]; then
+                echo_error "Unknown Android architecture: $ANDROID_ARCH"
+                exit 1
+            fi
+
+            if build_android "$target" "$target" "$ANDROID_ARCH" "$toolchain"; then
+                echo_info "✓ Android $ANDROID_ARCH build successful"
             else
-                echo_error "✗ Android $abi build failed"
+                echo_error "✗ Android $ANDROID_ARCH build failed"
                 exit 1
             fi
         else
             # Build all Android architectures
             echo_info "Building all Android architectures..."
-            for target in "${!ANDROID_TARGETS[@]}"; do
-                IFS='|' read -r abi toolchain <<< "${ANDROID_TARGETS[$target]}"
+
+            # List of all ABIs to build
+            ANDROID_ABIS="arm64-v8a armeabi-v7a x86 x86_64"
+
+            for abi in $ANDROID_ABIS; do
+                target=$(get_android_target "$abi")
+                toolchain=$(get_android_toolchain "$target")
 
                 if build_android "$target" "$target" "$abi" "$toolchain"; then
                     echo_info "✓ Android $abi build successful"
