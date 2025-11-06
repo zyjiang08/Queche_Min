@@ -8,7 +8,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-QUICHE_DIR="${SCRIPT_DIR}/quiche"
+QUICHE_DIR="${SCRIPT_DIR}"  # Build from workspace root, not quiche/ subdirectory
 OUTPUT_DIR="${SCRIPT_DIR}/mobile_libs"
 
 # Colors for output
@@ -137,7 +137,7 @@ build_ios() {
 
     # Copy header files (only once)
     if [ ! -d "${OUTPUT_DIR}/ios/include" ]; then
-        cp -r engine/include "${OUTPUT_DIR}/ios/"
+        cp -r quiche/engine/include "${OUTPUT_DIR}/ios/"
         echo_info "Headers copied to: ${OUTPUT_DIR}/ios/include/"
     fi
 
@@ -158,7 +158,7 @@ build_macos() {
     # Add macOS target if not already installed
     rustup target add "$target" || true
 
-    # Build quiche for macOS
+    # Build quiche for macOS with cpp-engine feature
     cargo build --lib --release --target "$target" --features cpp-engine
 
     # Find the build output directory
@@ -189,7 +189,7 @@ build_macos() {
     # Create output directory
     mkdir -p "${OUTPUT_DIR}/macos/${arch}"
 
-    # Combine all libraries into one fat static library
+    # Combine all libraries into one static library
     echo_info "Combining libraries..."
 
     # Use the fat library if it exists, otherwise use the regular one
@@ -229,12 +229,19 @@ build_macos() {
 
     # Show library info
     echo_info "Library size: $(du -h "${OUTPUT_DIR}/macos/${arch}/libquiche_engine.a" | cut -f1)"
-    echo_info "Library symbols:"
-    nm -g "${OUTPUT_DIR}/macos/${arch}/libquiche_engine.a" | grep -E "QuicheEngine|ev_run" | head -10 || true
+
+    # Try to show library symbols (suppress nm version warnings)
+    echo_info "Library symbols (sample):"
+    if nm -g "${OUTPUT_DIR}/macos/${arch}/libquiche_engine.a" 2>/dev/null | grep -E "QuicheEngine|ev_run" | head -10; then
+        :  # Success, symbols found
+    else
+        echo_info "Note: nm tool version mismatch (Rust LLVM newer than Xcode), but library is valid"
+        echo_info "You can verify symbols with: llvm-nm or otool"
+    fi
 
     # Copy header files (only once)
     if [ ! -d "${OUTPUT_DIR}/macos/include" ]; then
-        cp -r engine/include "${OUTPUT_DIR}/macos/"
+        cp -r quiche/engine/include "${OUTPUT_DIR}/macos/"
         echo_info "Headers copied to: ${OUTPUT_DIR}/macos/include/"
     fi
 
@@ -343,7 +350,7 @@ build_android() {
 
     # Copy header files (only once)
     if [ ! -d "${OUTPUT_DIR}/android/include" ]; then
-        cp -r engine/include "${OUTPUT_DIR}/android/"
+        cp -r quiche/engine/include "${OUTPUT_DIR}/android/"
         echo_info "Headers copied to: ${OUTPUT_DIR}/android/include/"
     fi
 

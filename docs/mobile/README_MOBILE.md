@@ -62,6 +62,13 @@ mobile_libs/
 │   │   └── libquiche_engine.a       # 包含所有依赖的单一库
 │   └── include/
 │       └── quiche_engine.h
+├── macos/
+│   ├── arm64/
+│   │   └── libquiche_engine.a       # 包含所有依赖的单一库
+│   ├── x86_64/
+│   │   └── libquiche_engine.a       # 包含所有依赖的单一库
+│   └── include/
+│       └── quiche_engine.h
 └── android/
     ├── arm64-v8a/
     │   └── libquiche_engine.so      # 包含所有依赖的单一库
