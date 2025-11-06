@@ -10,7 +10,7 @@
 #include <mutex>
 #include <thread>
 
-#include "thread_utils.h"
+#include "quiche_thread_utils.h"
 
 extern "C" {
 #include <sys/types.h>

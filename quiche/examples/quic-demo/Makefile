@@ -21,14 +21,14 @@ SERVER = quic-server
 SERVER_SRC = $(SRC_DIR)/server.c
 ENGINE_IMPL_SRC = ../../engine/src/quiche_engine_impl.cpp
 ENGINE_API_SRC = ../../engine/src/quiche_engine_api.cpp
-THREAD_UTILS_SRC = ../../engine/src/thread_utils.cpp
+THREAD_UTILS_SRC = ../../engine/src/quiche_thread_utils.cpp
 CLIENT_SRC = $(SRC_DIR)/client.cpp
 
 # Object files
 SERVER_OBJ = $(BUILD_DIR)/server.o
 ENGINE_IMPL_OBJ = $(BUILD_DIR)/quiche_engine_impl.o
 ENGINE_API_OBJ = $(BUILD_DIR)/quiche_engine_api.o
-THREAD_UTILS_OBJ = $(BUILD_DIR)/thread_utils.o
+THREAD_UTILS_OBJ = $(BUILD_DIR)/quiche_thread_utils.o
 CLIENT_OBJ = $(BUILD_DIR)/client.o
 ENGINE_OBJS = $(ENGINE_IMPL_OBJ) $(ENGINE_API_OBJ) $(THREAD_UTILS_OBJ)
 
