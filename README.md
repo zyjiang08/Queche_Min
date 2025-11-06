@@ -38,6 +38,47 @@ quiche can be [integrated into curl][curl-http3] to provide support for HTTP/3.
 [android-http3]: https://security.googleblog.com/2022/07/dns-over-http3-in-android.html
 [curl-http3]: https://github.com/curl/curl/blob/master/docs/HTTP3.md#quiche-version
 
+Mobile Platform Support
+-----------------------
+
+quiche now provides optimized support for **iOS**, **macOS**, and **Android** platforms with a high-level C++ Engine API:
+
+- 📱 **iOS**: Static library (.a) for arm64 (device) and x86_64 (simulator)
+- 💻 **macOS**: Static library (.a) for arm64 (Apple Silicon) and x86_64 (Intel)
+- 🤖 **Android**: Shared library (.so) for arm64-v8a, armeabi-v7a, x86, x86_64
+- 🔋 **Self-contained**: Includes vendored libev, no external dependencies
+- 🚀 **Easy integration**: One-line build script for all platforms
+
+**Quick Start:**
+```bash
+# Build iOS library (device)
+./build_mobile_libs.sh ios
+
+# Build iOS simulator library
+./build_mobile_libs.sh ios:x86_64
+
+# Build macOS library (auto-detects architecture)
+./build_mobile_libs.sh macos
+
+# Build macOS for specific architecture
+./build_mobile_libs.sh macos:arm64      # Apple Silicon
+./build_mobile_libs.sh macos:x86_64     # Intel
+
+# Build Android libraries (all architectures)
+./build_mobile_libs.sh android
+
+# Build specific architectures (faster for development)
+./build_mobile_libs.sh android:arm64-v8a
+./build_mobile_libs.sh ios:arm64 macos android:arm64-v8a
+
+# Build all platforms
+./build_mobile_libs.sh all
+```
+
+**📚 Complete documentation**: See [docs/mobile/](docs/mobile/) for detailed guides, integration examples, and API reference.
+
+**🎯 Start here**: [docs/mobile/README_MOBILE.md](docs/mobile/README_MOBILE.md)
+
 Getting Started
 ---------------
 

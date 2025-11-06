@@ -21,8 +21,9 @@ include = [
   "/deps/boringssl/**/CMakeLists.txt",
   "/deps/boringssl/**/sources.cmake",
   "/deps/boringssl/LICENSE",
-  "/api/**/*.h",
-  "/api/**/*.cpp",
+  "/engine/**/*.h",
+  "/engine/**/*.cpp",
+  "/engine/**/*.c",
   "/examples",
   "/include",
   "/quiche.svg",
@@ -61,7 +62,8 @@ internal = []
 http3 = []
 
 # Build C++ Engine (high-level API with event loop integration).
-cpp-engine = ["pkg-config"]
+# Includes vendored libev built from source.
+cpp-engine = []
 
 [package.metadata.release]
 tag-prefix = ""

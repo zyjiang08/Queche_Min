@@ -317,88 +317,74 @@ fn main() {
 fn build_cpp_engine() {
     use std::env;
 
-    println!("cargo:rerun-if-changed=api/src");
-    println!("cargo:rerun-if-changed=api/include");
+    println!("cargo:rerun-if-changed=engine/src");
+    println!("cargo:rerun-if-changed=engine/include");
+    println!("cargo:rerun-if-changed=engine/deps/libev");
 
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
+
+    // ============================================================================
+    // Build libev from source (vendored)
+    // ============================================================================
+    println!("cargo:warning=Building vendored libev from source...");
+
+    let mut libev_build = cc::Build::new();
+    libev_build
+        .file("engine/deps/libev/ev.c")
+        .include("engine/deps/libev")
+        .warnings(false)  // Suppress warnings from third-party code
+        .define("EV_STANDALONE", "1");  // Don't need config.h
+
+    // Platform-specific libev configuration
+    match target_os.as_str() {
+        "linux" | "android" => {
+            libev_build.define("EV_USE_EPOLL", "1");
+            libev_build.define("EV_USE_POLL", "1");
+            libev_build.define("EV_USE_SELECT", "1");
+        }
+        "macos" | "ios" => {
+            libev_build.define("EV_USE_KQUEUE", "1");
+            libev_build.define("EV_USE_POLL", "1");
+            libev_build.define("EV_USE_SELECT", "1");
+        }
+        "freebsd" | "openbsd" | "netbsd" | "dragonfly" => {
+            libev_build.define("EV_USE_KQUEUE", "1");
+            libev_build.define("EV_USE_POLL", "1");
+            libev_build.define("EV_USE_SELECT", "1");
+        }
+        "windows" => {
+            libev_build.define("EV_USE_SELECT", "1");
+        }
+        _ => {
+            libev_build.define("EV_USE_POLL", "1");
+            libev_build.define("EV_USE_SELECT", "1");
+        }
+    }
+
+    libev_build.compile("ev");
+    println!("cargo:warning=libev built successfully");
+
+    // ============================================================================
     // Build C++ Engine
+    // ============================================================================
+    println!("cargo:warning=Building C++ Engine...");
+
     let mut build = cc::Build::new();
     build
         .cpp(true)
         .flag_if_supported("-std=c++17")
         .warnings(true)
         // Include paths
-        .include("api/include")
-        .include("api/src")
-        .include("include");  // quiche.h
+        .include("engine/include")
+        .include("engine/src")
+        .include("engine/deps/libev")  // libev headers
+        .include("include");            // quiche.h
 
     // Source files
     build
-        .file("api/src/quiche_engine_api.cpp")
-        .file("api/src/quiche_engine_impl.cpp")
-        .file("api/src/thread_utils.cpp");
-
-    // Find libev - try pkg-config first, then fallback to manual detection
-    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
-    let libev_found = match pkg_config::probe_library("libev") {
-        Ok(lib) => {
-            // Found via pkg-config
-            for path in &lib.include_paths {
-                build.include(path);
-            }
-            for path in &lib.link_paths {
-                println!("cargo:rustc-link-search=native={}", path.display());
-            }
-            for lib_name in &lib.libs {
-                println!("cargo:rustc-link-lib={}", lib_name);
-            }
-            true
-        },
-        Err(_) => {
-            // pkg-config failed, try manual detection
-            println!("cargo:warning=libev not found via pkg-config, trying manual detection...");
-
-            // Try common installation paths
-            let libev_paths = if target_os == "macos" {
-                vec![
-                    "/usr/local/opt/libev",     // Homebrew (Intel)
-                    "/opt/homebrew/opt/libev",  // Homebrew (Apple Silicon)
-                    "/usr/local",                // Manual install
-                ]
-            } else {
-                vec![
-                    "/usr",
-                    "/usr/local",
-                ]
-            };
-
-            let mut found = false;
-            for base_path in &libev_paths {
-                let include_path = format!("{}/include", base_path);
-                let lib_path = format!("{}/lib", base_path);
-                let header_file = format!("{}/ev.h", include_path);
-
-                if std::path::Path::new(&header_file).exists() {
-                    println!("cargo:warning=Found libev at {}", base_path);
-                    build.include(&include_path);
-                    println!("cargo:rustc-link-search=native={}", lib_path);
-                    println!("cargo:rustc-link-lib=ev");
-                    found = true;
-                    break;
-                }
-            }
-
-            found
-        }
-    };
-
-    if !libev_found {
-        println!("cargo:warning=libev not found!");
-        println!("cargo:warning=Please install libev:");
-        println!("cargo:warning=  Ubuntu/Debian: sudo apt-get install libev-dev");
-        println!("cargo:warning=  macOS:         brew install libev");
-        println!("cargo:warning=  Fedora/RHEL:   sudo yum install libev-devel");
-        panic!("libev not found. Please install libev");
-    }
+        .file("engine/src/quiche_engine_api.cpp")
+        .file("engine/src/quiche_engine_impl.cpp")
+        .file("engine/src/thread_utils.cpp");
 
     // Platform-specific configuration
     match target_os.as_str() {
@@ -431,17 +417,153 @@ fn build_cpp_engine() {
         _ => {}
     }
 
-    // Compile as static library
+    // Compile C++ Engine (always as static lib intermediate)
     build.compile("quiche_engine");
 
-    // Link C++ standard library and platform-specific libraries
+    // ============================================================================
+    // Platform-specific library packaging
+    // ============================================================================
+    let out_dir = env::var("OUT_DIR").unwrap();
+    let out_path = std::path::Path::new(&out_dir);
+
+    // Get paths to compiled libraries
+    let libev_path = out_path.join("libev.a");
+    let libengine_path = out_path.join("libquiche_engine.a");
+
     match target_os.as_str() {
-        "macos" | "ios" => {
+        "android" => {
+            // Android: Build shared library (libquiche_engine.so)
+            println!("cargo:warning=Creating Android shared library (libquiche_engine.so)...");
+
+            let target = env::var("TARGET").unwrap();
+            let android_ndk = env::var("ANDROID_NDK_HOME")
+                .expect("ANDROID_NDK_HOME must be set for Android build");
+
+            // Determine the NDK toolchain
+            let (toolchain_prefix, toolchain_arch) = match target.as_str() {
+                t if t.starts_with("aarch64") => ("aarch64-linux-android", "arm64-v8a"),
+                t if t.starts_with("armv7") => ("armv7a-linux-androideabi", "armeabi-v7a"),
+                t if t.starts_with("i686") => ("i686-linux-android", "x86"),
+                t if t.starts_with("x86_64") => ("x86_64-linux-android", "x86_64"),
+                _ => panic!("Unsupported Android target: {}", target),
+            };
+
+            let api_level = env::var("ANDROID_API_LEVEL").unwrap_or_else(|_| "21".to_string());
+            let ndk_path = std::path::Path::new(&android_ndk);
+            let toolchain_bin = ndk_path.join(format!(
+                "toolchains/llvm/prebuilt/darwin-x86_64/bin/{}{}-clang++",
+                toolchain_prefix, api_level
+            ));
+
+            // Build shared library command
+            let so_output = out_path.join("libquiche_engine.so");
+            let link_result = std::process::Command::new(&toolchain_bin)
+                .arg("-shared")
+                .arg("-o")
+                .arg(&so_output)
+                .arg("-Wl,--whole-archive")
+                .arg(&libengine_path)
+                .arg(&libev_path)
+                .arg("-Wl,--no-whole-archive")
+                .arg("-lc++_shared")
+                .arg("-llog")
+                .arg("-lm")
+                .output();
+
+            match link_result {
+                Ok(output) if output.status.success() => {
+                    println!("cargo:warning=Android shared library created successfully");
+                    println!("cargo:warning=Output: {}", so_output.display());
+
+                    // Copy to a standard location
+                    let lib_dir = out_path.parent().unwrap().parent().unwrap().parent().unwrap();
+                    let final_so = lib_dir.join("libquiche_engine.so");
+                    std::fs::copy(&so_output, &final_so).ok();
+                }
+                Ok(output) => {
+                    println!("cargo:warning=Failed to create shared library");
+                    println!("cargo:warning=stdout: {}", String::from_utf8_lossy(&output.stdout));
+                    println!("cargo:warning=stderr: {}", String::from_utf8_lossy(&output.stderr));
+                }
+                Err(e) => {
+                    println!("cargo:warning=Failed to execute linker: {}", e);
+                }
+            }
+
+            // Link standard libraries for Android
+            println!("cargo:rustc-link-lib=c++_shared");
+            println!("cargo:rustc-link-lib=log");
+            println!("cargo:rustc-link-lib=m");
+        }
+
+        "ios" => {
+            // iOS: Create fat static library (libquiche_engine.a with libev.a included)
+            println!("cargo:warning=Creating iOS fat static library (libquiche_engine.a)...");
+
+            // Use libtool to combine archives
+            let combined_output = out_path.join("libquiche_engine_fat.a");
+            let libtool_result = std::process::Command::new("libtool")
+                .arg("-static")
+                .arg("-o")
+                .arg(&combined_output)
+                .arg(&libengine_path)
+                .arg(&libev_path)
+                .output();
+
+            match libtool_result {
+                Ok(output) if output.status.success() => {
+                    println!("cargo:warning=iOS fat static library created successfully");
+                    println!("cargo:warning=Output: {}", combined_output.display());
+
+                    // Replace the original with combined version
+                    std::fs::copy(&combined_output, &libengine_path).ok();
+
+                    // Copy to a standard location
+                    let lib_dir = out_path.parent().unwrap().parent().unwrap().parent().unwrap();
+                    let final_a = lib_dir.join("libquiche_engine.a");
+                    std::fs::copy(&combined_output, &final_a).ok();
+                }
+                Ok(output) => {
+                    println!("cargo:warning=Failed to create fat static library");
+                    println!("cargo:warning=stdout: {}", String::from_utf8_lossy(&output.stdout));
+                    println!("cargo:warning=stderr: {}", String::from_utf8_lossy(&output.stderr));
+                }
+                Err(e) => {
+                    println!("cargo:warning=Failed to execute libtool: {}", e);
+                    println!("cargo:warning=Using ar as fallback...");
+
+                    // Fallback: use ar to combine
+                    let ar_result = std::process::Command::new("ar")
+                        .arg("-rcs")
+                        .arg(&combined_output)
+                        .arg(&libengine_path)
+                        .arg(&libev_path)
+                        .output();
+
+                    if let Ok(output) = ar_result {
+                        if output.status.success() {
+                            println!("cargo:warning=Combined library created with ar");
+                            std::fs::copy(&combined_output, &libengine_path).ok();
+                        }
+                    }
+                }
+            }
+
+            // Link standard libraries for iOS
             println!("cargo:rustc-link-lib=c++");
             println!("cargo:rustc-link-lib=framework=Security");
             println!("cargo:rustc-link-lib=framework=Foundation");
         }
-        "linux" | "android" => {
+
+        "macos" => {
+            // macOS: Keep as separate static libraries
+            println!("cargo:rustc-link-lib=c++");
+            println!("cargo:rustc-link-lib=framework=Security");
+            println!("cargo:rustc-link-lib=framework=Foundation");
+        }
+
+        "linux" => {
+            // Linux: Keep as separate static libraries
             let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
             if target_env == "musl" {
                 println!("cargo:rustc-link-lib=c++");
@@ -452,10 +574,15 @@ fn build_cpp_engine() {
             println!("cargo:rustc-link-lib=dl");
             println!("cargo:rustc-link-lib=m");
         }
+
         "windows" => {
+            // Windows: Keep as separate static libraries
             println!("cargo:rustc-link-lib=ws2_32");
             println!("cargo:rustc-link-lib=userenv");
         }
+
         _ => {}
     }
+
+    println!("cargo:warning=C++ Engine built successfully");
 }

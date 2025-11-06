@@ -6,7 +6,7 @@ CC = gcc
 CXX = g++
 CFLAGS = -Wall -Wextra -O2 -g
 CXXFLAGS = -Wall -Wextra -O2 -g -std=c++17
-INCLUDES = -I./include -I../../api/include -I../../api/src -I/usr/local/include
+INCLUDES = -I./include -I../../engine/include -I../../engine/src -I/usr/local/include
 LDFLAGS = -L./lib -L/usr/local/lib
 LIBS = -lquiche -lev -lpthread -ldl -lm
 
@@ -31,10 +31,10 @@ ENGINE_C_SRC = $(SRC_DIR)/quiche_engine.c
 CLIENT_C_SRC = $(SRC_DIR)/client.c
 SERVER_C_SRC = $(SRC_DIR)/server.c
 
-# C++ Source files (modularized) - using new api/ location
-ENGINE_IMPL_CPP_SRC = ../../api/src/quiche_engine_impl.cpp
-ENGINE_API_CPP_SRC = ../../api/src/quiche_engine_api.cpp
-THREAD_UTILS_CPP_SRC = ../../api/src/thread_utils.cpp
+# C++ Source files (modularized) - using new engine/ location
+ENGINE_IMPL_CPP_SRC = ../../engine/src/quiche_engine_impl.cpp
+ENGINE_API_CPP_SRC = ../../engine/src/quiche_engine_api.cpp
+THREAD_UTILS_CPP_SRC = ../../engine/src/thread_utils.cpp
 CLIENT_CPP_SRC = $(SRC_DIR)/client.cpp
 
 # C Object files
@@ -80,19 +80,19 @@ $(SERVER): $(SERVER_C_OBJ)
 	@echo "Built $(SERVER) successfully"
 
 # Compile C++ engine implementation object
-$(ENGINE_IMPL_CPP_OBJ): $(ENGINE_IMPL_CPP_SRC) ../../api/src/quiche_engine_impl.h ../../api/include/quiche_engine.h
+$(ENGINE_IMPL_CPP_OBJ): $(ENGINE_IMPL_CPP_SRC) ../../engine/src/quiche_engine_impl.h ../../engine/include/quiche_engine.h
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $(ENGINE_IMPL_CPP_SRC) -o $(ENGINE_IMPL_CPP_OBJ)
 
 # Compile C++ engine API object
-$(ENGINE_API_CPP_OBJ): $(ENGINE_API_CPP_SRC) ../../api/include/quiche_engine.h ../../api/src/quiche_engine_impl.h
+$(ENGINE_API_CPP_OBJ): $(ENGINE_API_CPP_SRC) ../../engine/include/quiche_engine.h ../../engine/src/quiche_engine_impl.h
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $(ENGINE_API_CPP_SRC) -o $(ENGINE_API_CPP_OBJ)
 
 # Compile C++ thread utils object
-$(THREAD_UTILS_CPP_OBJ): $(THREAD_UTILS_CPP_SRC) ../../api/src/thread_utils.h
+$(THREAD_UTILS_CPP_OBJ): $(THREAD_UTILS_CPP_SRC) ../../engine/src/thread_utils.h
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $(THREAD_UTILS_CPP_SRC) -o $(THREAD_UTILS_CPP_OBJ)
 
 # Compile C++ client object
-$(CLIENT_CPP_OBJ): $(CLIENT_CPP_SRC) ../../api/include/quiche_engine.h
+$(CLIENT_CPP_OBJ): $(CLIENT_CPP_SRC) ../../engine/include/quiche_engine.h
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $(CLIENT_CPP_SRC) -o $(CLIENT_CPP_OBJ)
 
 # Compile C engine object
