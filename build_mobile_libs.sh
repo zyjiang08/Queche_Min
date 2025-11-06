@@ -66,7 +66,7 @@ build_ios() {
 
     # Find the build output directory
     BUILD_DIR="target/${target}/release/build"
-    QUICHE_BUILD=$(find "$BUILD_DIR" -name "quiche-*" -type d | head -1)
+    QUICHE_BUILD=$(find "$BUILD_DIR" -name "quiche-*" -type d -exec stat -f "%m %N" {} \; | sort -rn | head -1 | cut -d' ' -f2-)
     OUT_DIR="${QUICHE_BUILD}/out"
 
     echo_info "Build output directory: $OUT_DIR"
@@ -163,7 +163,7 @@ build_macos() {
 
     # Find the build output directory
     BUILD_DIR="target/${target}/release/build"
-    QUICHE_BUILD=$(find "$BUILD_DIR" -name "quiche-*" -type d | head -1)
+    QUICHE_BUILD=$(find "$BUILD_DIR" -name "quiche-*" -type d -exec stat -f "%m %N" {} \; | sort -rn | head -1 | cut -d' ' -f2-)
     OUT_DIR="${QUICHE_BUILD}/out"
 
     echo_info "Build output directory: $OUT_DIR"
@@ -294,7 +294,7 @@ build_android() {
 
     # Find the build output directory
     BUILD_DIR="target/${target}/release/build"
-    QUICHE_BUILD=$(find "$BUILD_DIR" -name "quiche-*" -type d | head -1)
+    QUICHE_BUILD=$(find "$BUILD_DIR" -name "quiche-*" -type d -exec stat -f "%m %N" {} \; | sort -rn | head -1 | cut -d' ' -f2-)
     OUT_DIR="${QUICHE_BUILD}/out"
 
     echo_info "Build output directory: $OUT_DIR"

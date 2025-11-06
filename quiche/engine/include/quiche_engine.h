@@ -152,28 +152,28 @@ public:
     bool setEventCallback(EventCallback callback, void* user_data = nullptr);
 
     /**
-     * Write data to a stream (thread-safe)
+     * Write data to stream (thread-safe)
+     * Uses internal default stream ID
      *
-     * @param stream_id Stream ID
      * @param data Data buffer
      * @param len Data length
      * @param fin Whether this is the final data on stream
      * @return Number of bytes written, or -1 on error
      */
-    ssize_t write(uint64_t stream_id, const uint8_t* data, size_t len, bool fin);
-    
+    ssize_t write(const uint8_t* data, size_t len, bool fin);
+
 
     /**
-     * Read data from a stream
+     * Read data from stream
      * Can be called from any thread (thread-safe)
+     * Uses internal default stream ID
      *
-     * @param stream_id Stream ID
      * @param buf Buffer to read into
      * @param buf_len Buffer length
      * @param fin Output: set to true if this is final data
      * @return Number of bytes read, 0 if no data available, -1 on fatal error
      */
-    ssize_t read(uint64_t stream_id, uint8_t* buf, size_t buf_len, bool& fin);
+    ssize_t read(uint8_t* buf, size_t buf_len, bool& fin);
 
     /**
      * Start the engine - begins connection and event loop (non-blocking)
@@ -211,6 +211,14 @@ public:
      * Get last error message
      */
     std::string getLastError() const;
+
+    /**
+     * Get source connection ID (SCID)
+     * Returns the unique connection identifier assigned to this connection
+     *
+     * @return Connection ID as hex string (8 characters)
+     */
+    std::string getScid() const;
 
 private:
     QuicheEngineImpl* mPImpl;

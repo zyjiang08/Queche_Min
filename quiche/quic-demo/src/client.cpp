@@ -44,8 +44,8 @@ static void dataReceivingThread() {
             break;
         }
 
-        // Try to read data from stream 4
-        ssize_t len = global_engine->read(4, buf, sizeof(buf), fin);
+        // Try to read data from stream
+        ssize_t len = global_engine->read(buf, sizeof(buf), fin);
 
         if (len > 0) {
             // Data received
@@ -108,7 +108,7 @@ static void dataSendingThread() {
             for (size_t offset = 0; offset < data.size(); offset += MAX_CHUNK) {
                 size_t chunk_size = std::min(MAX_CHUNK, data.size() - offset);
 
-                ssize_t written = global_engine->write(4, data.data() + offset, chunk_size, false);
+                ssize_t written = global_engine->write(data.data() + offset, chunk_size, false);
 
                 if (written > 0) {
                     sent_this_round += written;
@@ -141,7 +141,7 @@ static void dataSendingThread() {
 
     // Close the stream with FIN
     if (global_engine) {
-        global_engine->write(4, nullptr, 0, true);  // Send FIN
+        global_engine->write(nullptr, 0, true);  // Send FIN
     }
 
     // Wait a bit for final responses

@@ -50,12 +50,12 @@ bool QuicheEngine::setEventCallback(EventCallback callback, void* user_data) {
     return mPImpl->setEventCallback(callback, user_data);
 }
 
-ssize_t QuicheEngine::write(uint64_t stream_id, const uint8_t* data, size_t len, bool fin) {
-    return mPImpl->write(stream_id, data, len, fin);
+ssize_t QuicheEngine::write(const uint8_t* data, size_t len, bool fin) {
+    return mPImpl->write(data, len, fin);
 }
 
-ssize_t QuicheEngine::read(uint64_t stream_id, uint8_t* buf, size_t buf_len, bool& fin) {
-    return mPImpl->read(stream_id, buf, buf_len, fin);
+ssize_t QuicheEngine::read(uint8_t* buf, size_t buf_len, bool& fin) {
+    return mPImpl->read(buf, buf_len, fin);
 }
 
 bool QuicheEngine::start() {
@@ -80,6 +80,10 @@ EngineStats QuicheEngine::getStats() const {
 
 std::string QuicheEngine::getLastError() const {
     return mPImpl->getLastError();
+}
+
+std::string QuicheEngine::getScid() const {
+    return mPImpl->getScid();
 }
 
 } // namespace quiche

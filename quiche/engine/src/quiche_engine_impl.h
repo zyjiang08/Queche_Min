@@ -24,6 +24,8 @@ namespace quiche {
 // Constants
 constexpr size_t LOCAL_CONN_ID_LEN = 16;
 constexpr size_t MAX_DATAGRAM_SIZE = 1350;
+constexpr size_t MAX_RECV_BUF_SIZE = 2048;  // Sufficient for receiving any UDP packet
+constexpr int BATCH_SIZE = 32;  // Batch size for recvmmsg/sendmmsg
 constexpr size_t MAX_WRITE_DATA_SIZE = 65536;
 
 // Command types for thread-safe communication
@@ -110,14 +112,15 @@ public:
     // Public API implementation
     void setWrapper(QuicheEngine* w) { mWrapper = w; }
     bool setEventCallback(EventCallback callback, void* user_data);
-    ssize_t write(uint64_t stream_id, const uint8_t* data, size_t len, bool fin);
-    ssize_t read(uint64_t stream_id, uint8_t* buf, size_t buf_len, bool& fin);
+    ssize_t write(const uint8_t* data, size_t len, bool fin);
+    ssize_t read(uint8_t* buf, size_t buf_len, bool& fin);
     bool start();
     void shutdown(uint64_t app_error, const std::string& reason);
     bool isConnected() const { return mIsConnected; }
     bool isRunning() const { return mIsRunning; }
     EngineStats getStats() const;
     std::string getLastError() const { return mLastError; }
+    std::string getScid() const { return mScid; }
 
 private:
     // Configuration
@@ -160,6 +163,25 @@ private:
     bool mIsRunning;
     bool mIsConnected;
     std::string mLastError;
+    std::string mScid;  // Source Connection ID (8-char hex string)
+    uint64_t mStreamId;  // Default stream ID for read/write operations
+
+    // I/O buffers (heap memory instead of static to reduce memory footprint)
+#if defined(__linux__)
+    // Batch I/O buffers for Linux (using recvmmsg/sendmmsg)
+    uint8_t (*mSendBufs)[MAX_DATAGRAM_SIZE];     // Array of send buffers
+    uint8_t (*mRecvBufs)[MAX_RECV_BUF_SIZE];     // Array of recv buffers
+    struct mmsghdr* mSendMsgs;                    // sendmmsg structures
+    struct mmsghdr* mRecvMsgs;                    // recvmmsg structures
+    struct iovec* mSendIovs;                      // iovec for send
+    struct iovec* mRecvIovs;                      // iovec for recv
+    quiche_send_info* mSendInfos;                 // send info array
+    struct sockaddr_storage* mRecvAddrs;          // peer addresses for recv
+#else
+    // Single packet buffers for macOS/iOS (using recvmsg/sendmsg)
+    uint8_t* mSendBuf;                            // Single send buffer
+    uint8_t* mRecvBuf;                            // Single recv buffer
+#endif
 
     // Helper methods
     bool setupConnection();
@@ -167,6 +189,7 @@ private:
     void processCommands();
     StreamReadBuffer* getOrCreateStreamBuffer(uint64_t stream_id);
     void readFromQuicheToBuffer(uint64_t stream_id);
+    std::string generateRandomHexString();  // Generate 8-char random hex string for SCID
 
     // Static callbacks
     static void eventLoopThread(QuicheEngineImpl* impl);  // C++11 thread function

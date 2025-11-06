@@ -3,6 +3,8 @@
 
 #include <iostream>
 #include <cstdlib>
+#include <cstring>  // For memset
+#include <random>   // For random_device, mt19937
 
 extern "C" {
 #include <unistd.h>
@@ -10,6 +12,8 @@ extern "C" {
 #include <errno.h>
 #include <netdb.h>
 #include <netinet/in.h>  // For IPPROTO_UDP on Android
+#include <signal.h>       // For SIGPIPE handling
+#include <sys/uio.h>      // For iovec (recvmsg/sendmsg)
 }
 
 namespace quiche {
@@ -83,9 +87,49 @@ QuicheEngineImpl::QuicheEngineImpl(const std::string& h, const std::string& p, c
       mLoop(nullptr), mThreadStarted(false),
       mEventCallback(nullptr), mUserData(nullptr), mWrapper(nullptr),
       mIsRunning(false), mIsConnected(false)
+#if defined(__linux__)
+      , mSendBufs(nullptr), mRecvBufs(nullptr), mSendMsgs(nullptr), mRecvMsgs(nullptr),
+      mSendIovs(nullptr), mRecvIovs(nullptr), mSendInfos(nullptr), mRecvAddrs(nullptr)
+#else
+      , mSendBuf(nullptr), mRecvBuf(nullptr)
+#endif
 {
     memset(&mLocalAddr, 0, sizeof(mLocalAddr));
     memset(&mPeerAddr, 0, sizeof(mPeerAddr));
+
+    // Allocate I/O buffers on heap
+#if defined(__linux__)
+    // Batch I/O buffers for Linux
+    mSendBufs = new uint8_t[BATCH_SIZE][MAX_DATAGRAM_SIZE];
+    mRecvBufs = new uint8_t[BATCH_SIZE][MAX_RECV_BUF_SIZE];
+    mSendMsgs = new struct mmsghdr[BATCH_SIZE];
+    mRecvMsgs = new struct mmsghdr[BATCH_SIZE];
+    mSendIovs = new struct iovec[BATCH_SIZE];
+    mRecvIovs = new struct iovec[BATCH_SIZE];
+    mSendInfos = new quiche_send_info[BATCH_SIZE];
+    mRecvAddrs = new struct sockaddr_storage[BATCH_SIZE];
+
+    // Initialize recv structures (can be reused)
+    for (int i = 0; i < BATCH_SIZE; i++) {
+        mRecvIovs[i].iov_base = mRecvBufs[i];
+        mRecvIovs[i].iov_len = MAX_RECV_BUF_SIZE;
+        memset(&mRecvMsgs[i], 0, sizeof(mRecvMsgs[i]));
+        mRecvMsgs[i].msg_hdr.msg_name = &mRecvAddrs[i];
+        mRecvMsgs[i].msg_hdr.msg_namelen = sizeof(mRecvAddrs[i]);
+        mRecvMsgs[i].msg_hdr.msg_iov = &mRecvIovs[i];
+        mRecvMsgs[i].msg_hdr.msg_iovlen = 1;
+    }
+#else
+    // Single packet buffers for macOS/iOS
+    mSendBuf = new uint8_t[MAX_DATAGRAM_SIZE];
+    mRecvBuf = new uint8_t[MAX_RECV_BUF_SIZE];
+#endif
+
+    // Generate source connection ID (SCID)
+    mScid = generateRandomHexString();
+
+    // Initialize default stream ID (client-initiated bidirectional stream)
+    mStreamId = 4;
 
     // std::mutex default constructor - no initialization needed
 }
@@ -135,6 +179,22 @@ QuicheEngineImpl::~QuicheEngineImpl() {
         }
         mStreamBuffers.clear();
     }
+
+    // Free I/O buffers
+#if defined(__linux__)
+    delete[] mSendBufs;
+    delete[] mRecvBufs;
+    delete[] mSendMsgs;
+    delete[] mRecvMsgs;
+    delete[] mSendIovs;
+    delete[] mRecvIovs;
+    delete[] mSendInfos;
+    delete[] mRecvAddrs;
+#else
+    delete[] mSendBuf;
+    delete[] mRecvBuf;
+#endif
+
     // std::mutex destructor called automatically
 }
 
@@ -172,6 +232,15 @@ bool QuicheEngineImpl::setupConnection() {
         freeaddrinfo(peer);
         return false;
     }
+
+    // Protect against SIGPIPE on macOS/iOS
+#ifdef SO_NOSIGPIPE
+    int set = 1;
+    if (setsockopt(mSock, SOL_SOCKET, SO_NOSIGPIPE, &set, sizeof(set)) < 0) {
+        // Non-fatal, just log
+        std::cerr << "Warning: Failed to set SO_NOSIGPIPE" << std::endl;
+    }
+#endif
 
     // Make mSocket non-blocking
     if (fcntl(mSock, F_SETFL, O_NONBLOCK) != 0) {
@@ -289,13 +358,73 @@ bool QuicheEngineImpl::setupConnection() {
 }
 
 void QuicheEngineImpl::flushEgress() {
-    static uint8_t out[MAX_DATAGRAM_SIZE];
-
     // No locking needed - called only from event loop thread!
+
+    // Try to use sendmmsg for batch sending if available (Linux only)
+#if defined(__linux__)
+    // Batch send multiple UDP packets in one syscall
+
+    // Use MSG_NOSIGNAL on Linux/Android to prevent SIGPIPE
+    int flags = 0;
+#ifdef MSG_NOSIGNAL
+    flags |= MSG_NOSIGNAL;
+#endif
+
+    while (true) {
+        int batch_count = 0;
+
+        // Collect a batch of packets from quiche
+        for (int i = 0; i < BATCH_SIZE; i++) {
+            ssize_t written = quiche_conn_send(mConn, mSendBufs[i], MAX_DATAGRAM_SIZE, &mSendInfos[i]);
+
+            if (written == QUICHE_ERR_DONE) {
+                break;
+            }
+
+            if (written < 0) {
+                mLastError = "Failed to create packet";
+                return;
+            }
+
+            // Setup iovec for this packet
+            mSendIovs[i].iov_base = mSendBufs[i];
+            mSendIovs[i].iov_len = written;
+
+            // Setup msghdr for this packet
+            memset(&mSendMsgs[i], 0, sizeof(mSendMsgs[i]));
+            mSendMsgs[i].msg_hdr.msg_name = &mSendInfos[i].to;
+            mSendMsgs[i].msg_hdr.msg_namelen = mSendInfos[i].to_len;
+            mSendMsgs[i].msg_hdr.msg_iov = &mSendIovs[i];
+            mSendMsgs[i].msg_hdr.msg_iovlen = 1;
+
+            batch_count++;
+        }
+
+        // If we have packets to send, send them in a batch
+        if (batch_count > 0) {
+            int sent_count = sendmmsg(mSock, mSendMsgs, batch_count, flags);
+            if (sent_count < 0) {
+                // Ignore send errors for now
+            }
+        }
+
+        // If we didn't fill the batch, no more packets to send
+        if (batch_count < BATCH_SIZE) {
+            break;
+        }
+    }
+#else
+    // Fallback to single packet sendmsg for macOS/iOS and other platforms
+
+    // Use MSG_NOSIGNAL on Linux/Android to prevent SIGPIPE
+    int flags = 0;
+#ifdef MSG_NOSIGNAL
+    flags |= MSG_NOSIGNAL;
+#endif
 
     while (true) {
         quiche_send_info send_info;
-        ssize_t written = quiche_conn_send(mConn, out, sizeof(out), &send_info);
+        ssize_t written = quiche_conn_send(mConn, mSendBuf, MAX_DATAGRAM_SIZE, &send_info);
 
         if (written == QUICHE_ERR_DONE) {
             break;
@@ -306,12 +435,24 @@ void QuicheEngineImpl::flushEgress() {
             return;
         }
 
-        ssize_t sent = sendto(mSock, out, written, 0,
-                             (struct sockaddr*)&send_info.to, send_info.to_len);
+        // Use sendmsg for single packet send
+        struct iovec iov;
+        iov.iov_base = mSendBuf;
+        iov.iov_len = written;
+
+        struct msghdr msg;
+        memset(&msg, 0, sizeof(msg));
+        msg.msg_name = &send_info.to;
+        msg.msg_namelen = send_info.to_len;
+        msg.msg_iov = &iov;
+        msg.msg_iovlen = 1;
+
+        ssize_t sent = sendmsg(mSock, &msg, flags);
         if (sent != written) {
             // Ignore send errors for now
         }
     }
+#endif
 
     // Update mTimer
     uint64_t timeout_ns = quiche_conn_timeout_as_nanos(mConn);
@@ -360,14 +501,72 @@ void QuicheEngineImpl::recvCallback(EV_P_ ev_io* w, int revents) {
     (void)revents;
 
     QuicheEngineImpl* impl = static_cast<QuicheEngineImpl*>(w->data);
-    static uint8_t buf[65535];
+
+    // Try to use recvmmsg for batch receiving if available (Linux only)
+#if defined(__linux__)
+    // Batch receive multiple UDP packets in one syscall
+
+    while (true) {
+        // Reset msg_namelen for each batch
+        for (int i = 0; i < BATCH_SIZE; i++) {
+            impl->mRecvMsgs[i].msg_hdr.msg_namelen = sizeof(impl->mRecvAddrs[i]);
+        }
+
+        // Receive multiple packets at once
+        int num_msgs = recvmmsg(impl->mSock, impl->mRecvMsgs, BATCH_SIZE, 0, nullptr);
+
+        if (num_msgs < 0) {
+            if (errno == EWOULDBLOCK || errno == EAGAIN) {
+                break;
+            }
+            impl->mLastError = "Failed to receive packets";
+            break;
+        }
+
+        // Process each received packet
+        for (int i = 0; i < num_msgs; i++) {
+            ssize_t len = impl->mRecvMsgs[i].msg_len;
+
+            quiche_recv_info recv_info = {
+                (struct sockaddr*)&impl->mRecvAddrs[i],
+                impl->mRecvMsgs[i].msg_hdr.msg_namelen,
+                (struct sockaddr*)&impl->mLocalAddr,
+                impl->mLocalAddrLen,
+            };
+
+            // No locking needed - called only from event loop thread!
+            ssize_t done = quiche_conn_recv(impl->mConn, impl->mRecvBufs[i], len, &recv_info);
+
+            if (done < 0) {
+                // Ignore receive errors for this packet
+            }
+        }
+
+        // If we received fewer packets than requested, socket is drained
+        if (num_msgs < BATCH_SIZE) {
+            break;
+        }
+    }
+#else
+    // Fallback to single packet recvmsg for macOS/iOS and other platforms
 
     while (true) {
         struct sockaddr_storage mPeerAddr;
         socklen_t mPeerAddrLen = sizeof(mPeerAddr);
 
-        ssize_t len = recvfrom(impl->mSock, buf, sizeof(buf), 0,
-                              (struct sockaddr*)&mPeerAddr, &mPeerAddrLen);
+        // Use recvmsg for single packet receive
+        struct iovec iov;
+        iov.iov_base = impl->mRecvBuf;
+        iov.iov_len = MAX_RECV_BUF_SIZE;
+
+        struct msghdr msg;
+        memset(&msg, 0, sizeof(msg));
+        msg.msg_name = &mPeerAddr;
+        msg.msg_namelen = sizeof(mPeerAddr);
+        msg.msg_iov = &iov;
+        msg.msg_iovlen = 1;
+
+        ssize_t len = recvmsg(impl->mSock, &msg, 0);
 
         if (len < 0) {
             if (errno == EWOULDBLOCK || errno == EAGAIN) {
@@ -377,6 +576,9 @@ void QuicheEngineImpl::recvCallback(EV_P_ ev_io* w, int revents) {
             break;
         }
 
+        // Update mPeerAddrLen from msg.msg_namelen
+        mPeerAddrLen = msg.msg_namelen;
+
         quiche_recv_info recv_info = {
             (struct sockaddr*)&mPeerAddr,
             mPeerAddrLen,
@@ -385,12 +587,13 @@ void QuicheEngineImpl::recvCallback(EV_P_ ev_io* w, int revents) {
         };
 
         // No locking needed - called only from event loop thread!
-        ssize_t done = quiche_conn_recv(impl->mConn, buf, len, &recv_info);
+        ssize_t done = quiche_conn_recv(impl->mConn, impl->mRecvBuf, len, &recv_info);
 
         if (done < 0) {
             // Ignore receive errors
         }
     }
+#endif
 
     impl->flushEgress();
 
@@ -581,7 +784,7 @@ void QuicheEngineImpl::shutdown(uint64_t app_error, const std::string& reason) {
     mIsRunning = false;
 }
 
-ssize_t QuicheEngineImpl::write(uint64_t stream_id, const uint8_t* data, size_t len, bool fin) {
+ssize_t QuicheEngineImpl::write(const uint8_t* data, size_t len, bool fin) {
     if (!data || len > MAX_WRITE_DATA_SIZE) {
         mLastError = "Invalid write parameters";
         return -1;
@@ -589,7 +792,7 @@ ssize_t QuicheEngineImpl::write(uint64_t stream_id, const uint8_t* data, size_t 
 
     auto* cmd = new Command();
     cmd->type = CommandType::WRITE;
-    cmd->params.write.stream_id = stream_id;
+    cmd->params.write.stream_id = mStreamId;  // Use default stream ID
     memcpy(cmd->params.write.data, data, len);
     cmd->params.write.len = len;
     cmd->params.write.fin = fin;
@@ -603,14 +806,14 @@ ssize_t QuicheEngineImpl::write(uint64_t stream_id, const uint8_t* data, size_t 
     return static_cast<ssize_t>(len);
 }
 
-ssize_t QuicheEngineImpl::read(uint64_t stream_id, uint8_t* buf, size_t buf_len, bool& fin) {
+ssize_t QuicheEngineImpl::read(uint8_t* buf, size_t buf_len, bool& fin) {
     if (!buf) {
         mLastError = "Invalid buffer";
         return -1;
     }
 
     // Get stream buffer (no quiche calls - lock-free with respect to quiche!)
-    StreamReadBuffer* buffer = getOrCreateStreamBuffer(stream_id);
+    StreamReadBuffer* buffer = getOrCreateStreamBuffer(mStreamId);  // Use default stream ID
 
     // Lock buffer access (not mConn - much lighter weight)
     std::lock_guard<std::mutex> lock(buffer->mMutex);
@@ -712,6 +915,29 @@ void QuicheEngineImpl::readFromQuicheToBuffer(uint64_t stream_id) {
             buffer->fin_received = true;
         }
     }
+}
+
+// Generate random hex string for SCID (8 characters)
+std::string QuicheEngineImpl::generateRandomHexString() {
+    // Random number generator
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<uint32_t> distrib(0, 0xFFFFFFFF);
+    uint32_t random_number = distrib(gen);
+
+    // Convert to hex manually
+    const char hex_chars[] = "0123456789abcdef";
+    std::string result(8, ' ');  // Pre-allocate 8 characters
+
+    for (int i = 7; i >= 0; --i) {
+        // Extract lowest 4 bits (nibble)
+        uint8_t nibble = random_number & 0x0F;
+        result[i] = hex_chars[nibble];
+        // Shift right by 4 bits for next nibble
+        random_number >>= 4;
+    }
+
+    return result;
 }
 
 } // namespace quiche
