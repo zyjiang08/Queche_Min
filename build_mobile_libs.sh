@@ -29,6 +29,26 @@ echo_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# Check and initialize git submodules
+check_submodules() {
+    if [ ! -f "quiche/deps/boringssl/CMakeLists.txt" ]; then
+        echo_warn "BoringSSL submodule not initialized"
+        echo_info "Initializing git submodules..."
+
+        if ! git submodule update --init --recursive; then
+            echo_error "Failed to initialize git submodules"
+            echo_error "Please manually run: git submodule update --init --recursive"
+            return 1
+        fi
+
+        echo_info "Git submodules initialized successfully"
+    else
+        echo_info "Git submodules already initialized"
+    fi
+
+    return 0
+}
+
 # Check if ANDROID_NDK_HOME is set for Android builds
 check_android_ndk() {
     if [ -z "$ANDROID_NDK_HOME" ]; then
@@ -502,6 +522,13 @@ main() {
                 ;;
         esac
     done
+
+    # Check and initialize git submodules before building
+    echo_info ""
+    if ! check_submodules; then
+        exit 1
+    fi
+    echo_info ""
 
     # Build for iOS
     if [ "$BUILD_IOS" = true ]; then
