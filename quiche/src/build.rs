@@ -396,8 +396,19 @@ fn build_cpp_engine() {
                 } else {
                     "iphoneos"
                 };
-                build.flag(&format!("-isysroot"));
-                build.flag(&format!("$(xcrun --sdk {} --show-sdk-path)", sdk));
+
+                // Get iOS SDK path by executing xcrun
+                let sdk_path = std::process::Command::new("xcrun")
+                    .args(&["--sdk", sdk, "--show-sdk-path"])
+                    .output()
+                    .expect("Failed to execute xcrun");
+                let sdk_path_str = String::from_utf8(sdk_path.stdout)
+                    .expect("Invalid UTF-8 from xcrun")
+                    .trim()
+                    .to_string();
+
+                build.flag("-isysroot");
+                build.flag(&sdk_path_str);
                 build.flag("-fembed-bitcode");
             }
         }
