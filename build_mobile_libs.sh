@@ -109,11 +109,22 @@ build_ios() {
         return 1
     fi
 
+    # Get BoringSSL libraries
+    LIBCRYPTO_PATH="${OUT_DIR}/build/libcrypto.a"
+    LIBSSL_PATH="${OUT_DIR}/build/libssl.a"
+    if [ ! -f "$LIBCRYPTO_PATH" ] || [ ! -f "$LIBSSL_PATH" ]; then
+        echo_error "BoringSSL libraries not found:"
+        echo_error "  libcrypto.a: $([ -f "$LIBCRYPTO_PATH" ] && echo "✓" || echo "✗")"
+        echo_error "  libssl.a: $([ -f "$LIBSSL_PATH" ] && echo "✓" || echo "✗")"
+        return 1
+    fi
+
     # Create output directory
     mkdir -p "${OUTPUT_DIR}/ios/${arch}"
 
     # Combine all libraries into one fat static library
     echo_info "Combining libraries..."
+    echo_info "Including: libquiche.a, libev.a, libquiche_engine.a, libcrypto.a, libssl.a"
 
     # Use the fat library if it exists, otherwise use the regular one
     ENGINE_LIB="${OUT_DIR}/libquiche_engine_fat.a"
@@ -127,7 +138,9 @@ build_ios() {
         libtool -static -o "${OUTPUT_DIR}/ios/${arch}/libquiche_engine.a" \
             "$LIBQUICHE_PATH" \
             "${OUT_DIR}/libev.a" \
-            "$ENGINE_LIB"
+            "$ENGINE_LIB" \
+            "$LIBCRYPTO_PATH" \
+            "$LIBSSL_PATH"
     else
         # Method 2: Fallback to ar
         echo_warn "libtool not found, using ar as fallback..."
@@ -139,6 +152,8 @@ build_ios() {
         ar -x "$LIBQUICHE_PATH"
         ar -x "${OUT_DIR}/libev.a"
         ar -x "$ENGINE_LIB"
+        ar -x "$LIBCRYPTO_PATH"
+        ar -x "$LIBSSL_PATH"
 
         # Create combined archive
         ar -rcs "${OUTPUT_DIR}/ios/${arch}/libquiche_engine.a" *.o
@@ -206,11 +221,22 @@ build_macos() {
         return 1
     fi
 
+    # Get BoringSSL libraries
+    LIBCRYPTO_PATH="${OUT_DIR}/build/libcrypto.a"
+    LIBSSL_PATH="${OUT_DIR}/build/libssl.a"
+    if [ ! -f "$LIBCRYPTO_PATH" ] || [ ! -f "$LIBSSL_PATH" ]; then
+        echo_error "BoringSSL libraries not found:"
+        echo_error "  libcrypto.a: $([ -f "$LIBCRYPTO_PATH" ] && echo "✓" || echo "✗")"
+        echo_error "  libssl.a: $([ -f "$LIBSSL_PATH" ] && echo "✓" || echo "✗")"
+        return 1
+    fi
+
     # Create output directory
     mkdir -p "${OUTPUT_DIR}/macos/${arch}"
 
     # Combine all libraries into one static library
     echo_info "Combining libraries..."
+    echo_info "Including: libquiche.a, libev.a, libquiche_engine.a, libcrypto.a, libssl.a"
 
     # Use the fat library if it exists, otherwise use the regular one
     ENGINE_LIB="${OUT_DIR}/libquiche_engine_fat.a"
@@ -224,7 +250,9 @@ build_macos() {
         libtool -static -o "${OUTPUT_DIR}/macos/${arch}/libquiche_engine.a" \
             "$LIBQUICHE_PATH" \
             "${OUT_DIR}/libev.a" \
-            "$ENGINE_LIB"
+            "$ENGINE_LIB" \
+            "$LIBCRYPTO_PATH" \
+            "$LIBSSL_PATH"
     else
         # Method 2: Fallback to ar
         echo_warn "libtool not found, using ar as fallback..."
@@ -236,6 +264,8 @@ build_macos() {
         ar -x "$LIBQUICHE_PATH"
         ar -x "${OUT_DIR}/libev.a"
         ar -x "$ENGINE_LIB"
+        ar -x "$LIBCRYPTO_PATH"
+        ar -x "$LIBSSL_PATH"
 
         # Create combined archive
         ar -rcs "${OUTPUT_DIR}/macos/${arch}/libquiche_engine.a" *.o
@@ -330,13 +360,17 @@ build_android() {
         LIBQUICHE_PATH="target/${target}/release/libquiche.a"
         LIBEV_PATH="${OUT_DIR}/libev.a"
         LIBENGINE_PATH="${OUT_DIR}/libquiche_engine.a"
+        LIBCRYPTO_PATH="${OUT_DIR}/build/libcrypto.a"
+        LIBSSL_PATH="${OUT_DIR}/build/libssl.a"
 
         # Check if all libraries exist
-        if [ ! -f "$LIBQUICHE_PATH" ] || [ ! -f "$LIBEV_PATH" ] || [ ! -f "$LIBENGINE_PATH" ]; then
+        if [ ! -f "$LIBQUICHE_PATH" ] || [ ! -f "$LIBEV_PATH" ] || [ ! -f "$LIBENGINE_PATH" ] || [ ! -f "$LIBCRYPTO_PATH" ] || [ ! -f "$LIBSSL_PATH" ]; then
             echo_error "One or more required libraries not found:"
             echo_error "  libquiche.a: $([ -f "$LIBQUICHE_PATH" ] && echo "✓" || echo "✗")"
             echo_error "  libev.a: $([ -f "$LIBEV_PATH" ] && echo "✓" || echo "✗")"
             echo_error "  libquiche_engine.a: $([ -f "$LIBENGINE_PATH" ] && echo "✓" || echo "✗")"
+            echo_error "  libcrypto.a (BoringSSL): $([ -f "$LIBCRYPTO_PATH" ] && echo "✓" || echo "✗")"
+            echo_error "  libssl.a (BoringSSL): $([ -f "$LIBSSL_PATH" ] && echo "✓" || echo "✗")"
             return 1
         fi
 
@@ -350,6 +384,7 @@ build_android() {
 
         # Create shared library
         echo_info "Creating shared library with $NDK_COMPILER..."
+        echo_info "Linking libraries: libquiche.a, libev.a, libquiche_engine.a, libcrypto.a, libssl.a"
         "$NDK_COMPILER" \
             -shared \
             -o "$SO_FILE" \
@@ -357,6 +392,8 @@ build_android() {
             "$LIBQUICHE_PATH" \
             "$LIBEV_PATH" \
             "$LIBENGINE_PATH" \
+            "$LIBCRYPTO_PATH" \
+            "$LIBSSL_PATH" \
             -Wl,--no-whole-archive \
             -lc++_shared \
             -llog \

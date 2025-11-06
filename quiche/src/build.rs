@@ -466,8 +466,16 @@ fn build_cpp_engine() {
                 toolchain_prefix, api_level
             ));
 
+            // Get BoringSSL libraries
+            let libcrypto_path = out_path.join("build/libcrypto.a");
+            let libssl_path = out_path.join("build/libssl.a");
+
             // Build shared library command
             let so_output = out_path.join("libquiche_engine.so");
+            println!("cargo:warning=Linking BoringSSL libraries:");
+            println!("cargo:warning=  libcrypto.a: {:?}", libcrypto_path);
+            println!("cargo:warning=  libssl.a: {:?}", libssl_path);
+
             let link_result = std::process::Command::new(&toolchain_bin)
                 .arg("-shared")
                 .arg("-o")
@@ -475,6 +483,8 @@ fn build_cpp_engine() {
                 .arg("-Wl,--whole-archive")
                 .arg(&libengine_path)
                 .arg(&libev_path)
+                .arg(&libcrypto_path)
+                .arg(&libssl_path)
                 .arg("-Wl,--no-whole-archive")
                 .arg("-lc++_shared")
                 .arg("-llog")
