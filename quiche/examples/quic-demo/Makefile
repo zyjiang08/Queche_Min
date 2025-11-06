@@ -2,7 +2,7 @@
 CC = gcc
 CXX = g++
 CFLAGS = -Wall -Wextra -O2 -g
-CXXFLAGS = -Wall -Wextra -O2 -g -std=c++17
+CXXFLAGS = -Wall -Wextra -O2 -g -std=c++11
 INCLUDES = -I./include -I../../engine/include -I../../engine/src -I/usr/local/include
 LDFLAGS = -L./lib -L/usr/local/lib
 LIBS = -lquiche -lev -lpthread -ldl -lm

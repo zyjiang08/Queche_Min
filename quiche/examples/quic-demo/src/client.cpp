@@ -161,14 +161,12 @@ static void onEngineEvent(
 
     switch (event) {
         case EngineEvent::CONNECTED: {
-            try {
-                const std::string& proto = std::get<std::string>(event_data);
-                std::cout << "✓ Connection established: " << proto << std::endl;
+            if (event_data.type == EventDataType::STRING) {
+                std::cout << "✓ Connection established: " << event_data.str_val << std::endl;
 
                 // Signal that connection is ready
                 connection_ready.store(true);
-
-            } catch (const std::bad_variant_access&) {
+            } else {
                 std::cerr << "✗ Invalid event data for CONNECTED event" << std::endl;
             }
             break;

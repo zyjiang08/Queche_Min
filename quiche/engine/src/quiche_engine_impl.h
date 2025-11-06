@@ -175,16 +175,33 @@ private:
     static void asyncCallback(EV_P_ ev_async* w, int revents);
     static void debugLog(const char* line, void* argp);
 
-    // Config helper
+    // Config helper (C++11 compatible)
     template<typename T>
     T getConfigValue(ConfigKey key, T default_value) const {
+        return default_value;  // Generic version returns default
+    }
+
+    // Template specializations
+    uint64_t getConfigValue(ConfigKey key, uint64_t default_value) const {
         auto it = mConfig.find(key);
-        if (it != mConfig.end()) {
-            try {
-                return std::get<T>(it->second);
-            } catch (const std::bad_variant_access&) {
-                return default_value;
-            }
+        if (it != mConfig.end() && it->second.type == ConfigValueType::UINT64) {
+            return it->second.uint_val;
+        }
+        return default_value;
+    }
+
+    bool getConfigValue(ConfigKey key, bool default_value) const {
+        auto it = mConfig.find(key);
+        if (it != mConfig.end() && it->second.type == ConfigValueType::BOOL) {
+            return it->second.bool_val;
+        }
+        return default_value;
+    }
+
+    std::string getConfigValue(ConfigKey key, const std::string& default_value) const {
+        auto it = mConfig.find(key);
+        if (it != mConfig.end() && it->second.type == ConfigValueType::STRING) {
+            return it->second.str_val;
         }
         return default_value;
     }

@@ -399,7 +399,7 @@ void QuicheEngineImpl::recvCallback(EV_P_ ev_io* w, int revents) {
 
     if (is_closed) {
         if (impl->mEventCallback) {
-            EventData data = std::monostate{};
+            EventData data;  // Default to NONE type
             impl->mEventCallback(nullptr, EngineEvent::CONNECTION_CLOSED, data, impl->mUserData);
         }
         ev_break(EV_A_ EVBREAK_ONE);
@@ -421,7 +421,7 @@ void QuicheEngineImpl::timeoutCallback(EV_P_ ev_timer* w, int revents) {
 
     if (is_closed) {
         if (impl->mEventCallback) {
-            EventData data = std::monostate{};
+            EventData data;  // Default to NONE type
             impl->mEventCallback(nullptr, EngineEvent::CONNECTION_CLOSED, data, impl->mUserData);
         }
         ev_break(EV_A_ EVBREAK_ONE);

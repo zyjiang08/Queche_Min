@@ -3,7 +3,6 @@
 
 #include <string>
 #include <map>
-#include <variant>
 #include <functional>
 #include <cstdint>
 #include <cstddef>
@@ -28,8 +27,28 @@ enum class ConfigKey {
     ENABLE_DEBUG_LOG,                    // bool: Enable debug logging
 };
 
-// Configuration value types
-using ConfigValue = std::variant<uint64_t, bool, std::string>;
+// Configuration value types (C++11 compatible)
+enum class ConfigValueType {
+    UINT64,
+    BOOL,
+    STRING
+};
+
+struct ConfigValue {
+    ConfigValueType type;
+    union {
+        uint64_t uint_val;
+        bool bool_val;
+    };
+    std::string str_val;
+
+    ConfigValue() : type(ConfigValueType::UINT64), uint_val(0) {}
+    ConfigValue(uint64_t v) : type(ConfigValueType::UINT64), uint_val(v) {}
+    ConfigValue(bool v) : type(ConfigValueType::BOOL), bool_val(v) {}
+    ConfigValue(const std::string& v) : type(ConfigValueType::STRING), uint_val(0), str_val(v) {}
+    ConfigValue(const char* v) : type(ConfigValueType::STRING), uint_val(0), str_val(v) {}
+};
+
 using ConfigMap = std::map<ConfigKey, ConfigValue>;
 
 // Engine events
@@ -42,12 +61,22 @@ enum class EngineEvent {
     ERROR,
 };
 
-// Event data variant
-using EventData = std::variant<
-    std::monostate,           // No data
-    std::string,              // Protocol string for CONNECTED
-    uint64_t                  // Stream ID for STREAM_READABLE/WRITABLE
->;
+// Event data types (C++11 compatible)
+enum class EventDataType {
+    NONE,
+    STRING,
+    UINT64
+};
+
+struct EventData {
+    EventDataType type;
+    std::string str_val;
+    uint64_t uint_val;
+
+    EventData() : type(EventDataType::NONE), uint_val(0) {}
+    EventData(const std::string& v) : type(EventDataType::STRING), str_val(v), uint_val(0) {}
+    EventData(uint64_t v) : type(EventDataType::UINT64), uint_val(v) {}
+};
 
 // Connection statistics
 struct EngineStats {
