@@ -272,6 +272,14 @@ fn main() {
         println!("cargo:rustc-link-lib=static=crypto");
     }
 
+    // Build C++ Engine if feature is enabled
+    #[cfg(feature = "cpp-engine")]
+    {
+        println!("cargo:warning=Building C++ Engine...");
+        build_cpp_engine();
+        println!("cargo:warning=C++ Engine built successfully");
+    }
+
     // MacOS: Allow cdylib to link with undefined symbols
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
     if target_os == "macos" {
@@ -298,5 +306,156 @@ fn main() {
     #[cfg(feature = "ffi")]
     if target_os != "windows" {
         cdylib_link_lines::metabuild();
+    }
+}
+
+// ============================================================================
+// C++ Engine Build Functions
+// ============================================================================
+
+#[cfg(feature = "cpp-engine")]
+fn build_cpp_engine() {
+    use std::env;
+
+    println!("cargo:rerun-if-changed=api/src");
+    println!("cargo:rerun-if-changed=api/include");
+
+    // Build C++ Engine
+    let mut build = cc::Build::new();
+    build
+        .cpp(true)
+        .flag_if_supported("-std=c++17")
+        .warnings(true)
+        // Include paths
+        .include("api/include")
+        .include("api/src")
+        .include("include");  // quiche.h
+
+    // Source files
+    build
+        .file("api/src/quiche_engine_api.cpp")
+        .file("api/src/quiche_engine_impl.cpp")
+        .file("api/src/thread_utils.cpp");
+
+    // Find libev - try pkg-config first, then fallback to manual detection
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
+    let libev_found = match pkg_config::probe_library("libev") {
+        Ok(lib) => {
+            // Found via pkg-config
+            for path in &lib.include_paths {
+                build.include(path);
+            }
+            for path in &lib.link_paths {
+                println!("cargo:rustc-link-search=native={}", path.display());
+            }
+            for lib_name in &lib.libs {
+                println!("cargo:rustc-link-lib={}", lib_name);
+            }
+            true
+        },
+        Err(_) => {
+            // pkg-config failed, try manual detection
+            println!("cargo:warning=libev not found via pkg-config, trying manual detection...");
+
+            // Try common installation paths
+            let libev_paths = if target_os == "macos" {
+                vec![
+                    "/usr/local/opt/libev",     // Homebrew (Intel)
+                    "/opt/homebrew/opt/libev",  // Homebrew (Apple Silicon)
+                    "/usr/local",                // Manual install
+                ]
+            } else {
+                vec![
+                    "/usr",
+                    "/usr/local",
+                ]
+            };
+
+            let mut found = false;
+            for base_path in &libev_paths {
+                let include_path = format!("{}/include", base_path);
+                let lib_path = format!("{}/lib", base_path);
+                let header_file = format!("{}/ev.h", include_path);
+
+                if std::path::Path::new(&header_file).exists() {
+                    println!("cargo:warning=Found libev at {}", base_path);
+                    build.include(&include_path);
+                    println!("cargo:rustc-link-search=native={}", lib_path);
+                    println!("cargo:rustc-link-lib=ev");
+                    found = true;
+                    break;
+                }
+            }
+
+            found
+        }
+    };
+
+    if !libev_found {
+        println!("cargo:warning=libev not found!");
+        println!("cargo:warning=Please install libev:");
+        println!("cargo:warning=  Ubuntu/Debian: sudo apt-get install libev-dev");
+        println!("cargo:warning=  macOS:         brew install libev");
+        println!("cargo:warning=  Fedora/RHEL:   sudo yum install libev-devel");
+        panic!("libev not found. Please install libev");
+    }
+
+    // Platform-specific configuration
+    match target_os.as_str() {
+        "macos" | "ios" => {
+            if target_os == "ios" {
+                let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
+                let sdk = if target_arch == "x86_64" {
+                    "iphonesimulator"
+                } else {
+                    "iphoneos"
+                };
+                build.flag(&format!("-isysroot"));
+                build.flag(&format!("$(xcrun --sdk {} --show-sdk-path)", sdk));
+                build.flag("-fembed-bitcode");
+            }
+        }
+        "android" => {
+            let api_level = env::var("ANDROID_API_LEVEL")
+                .unwrap_or_else(|_| "21".to_string());
+            build.flag(&format!("-D__ANDROID_API__={}", api_level));
+            build.flag("-pthread");
+        }
+        "linux" => {
+            build.flag("-pthread");
+        }
+        "windows" => {
+            build.flag("/EHsc");  // Enable C++ exceptions
+            build.define("_WIN32_WINNT", "0x0601");  // Windows 7+
+        }
+        _ => {}
+    }
+
+    // Compile as static library
+    build.compile("quiche_engine");
+
+    // Link C++ standard library and platform-specific libraries
+    match target_os.as_str() {
+        "macos" | "ios" => {
+            println!("cargo:rustc-link-lib=c++");
+            println!("cargo:rustc-link-lib=framework=Security");
+            println!("cargo:rustc-link-lib=framework=Foundation");
+        }
+        "linux" | "android" => {
+            let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+            if target_env == "musl" {
+                println!("cargo:rustc-link-lib=c++");
+            } else {
+                println!("cargo:rustc-link-lib=stdc++");
+            }
+            println!("cargo:rustc-link-lib=pthread");
+            println!("cargo:rustc-link-lib=dl");
+            println!("cargo:rustc-link-lib=m");
+        }
+        "windows" => {
+            println!("cargo:rustc-link-lib=ws2_32");
+            println!("cargo:rustc-link-lib=userenv");
+        }
+        _ => {}
     }
 }
