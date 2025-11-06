@@ -335,18 +335,22 @@ build_android() {
 [target.aarch64-linux-android]
 ar = "${NDK_BIN}/llvm-ar"
 linker = "${NDK_BIN}/aarch64-linux-android${ANDROID_API_LEVEL}-clang"
+rustflags = ["-C", "link-arg=-lgcc"]
 
 [target.armv7-linux-androideabi]
 ar = "${NDK_BIN}/llvm-ar"
 linker = "${NDK_BIN}/armv7a-linux-androideabi${ANDROID_API_LEVEL}-clang"
+rustflags = ["-C", "link-arg=-lgcc"]
 
 [target.i686-linux-android]
 ar = "${NDK_BIN}/llvm-ar"
 linker = "${NDK_BIN}/i686-linux-android${ANDROID_API_LEVEL}-clang"
+rustflags = ["-C", "link-arg=-lgcc"]
 
 [target.x86_64-linux-android]
 ar = "${NDK_BIN}/llvm-ar"
 linker = "${NDK_BIN}/x86_64-linux-android${ANDROID_API_LEVEL}-clang"
+rustflags = ["-C", "link-arg=-lgcc"]
 CARGO_CONFIG
 
     # Convert target triple to underscore format for environment variables
