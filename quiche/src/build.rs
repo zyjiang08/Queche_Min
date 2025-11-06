@@ -384,7 +384,7 @@ fn build_cpp_engine() {
     build
         .file("engine/src/quiche_engine_api.cpp")
         .file("engine/src/quiche_engine_impl.cpp")
-        .file("engine/src/thread_utils.cpp");
+        .file("engine/src/quiche_thread_utils.cpp");
 
     // Platform-specific configuration
     match target_os.as_str() {
