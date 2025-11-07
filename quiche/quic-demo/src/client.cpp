@@ -144,8 +144,13 @@ static void dataSendingThread() {
         global_engine->write(nullptr, 0, true);  // Send FIN
     }
 
-    // Wait a bit for final responses
-    std::this_thread::sleep_for(std::chrono::seconds(2));
+    std::cout << "\n⏱ Waiting 8 seconds for server to complete sending remaining data..." << std::endl;
+
+    // Wait longer for server to complete sending (8 seconds instead of 2)
+    for (int i = 0; i < 8 && !should_stop.load(); i++) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        std::cout << "  " << (i + 1) << "/8 seconds..." << std::endl;
+    }
 
     should_stop.store(true);
 }
@@ -287,6 +292,24 @@ int main(int argc, char* argv[]) {
         if (sender_thread.joinable()) {
             sender_thread.join();
         }
+
+        // Print final statistics
+        std::cout << "\n" << std::string(60, '=') << std::endl;
+        std::cout << "Final Statistics" << std::endl;
+        std::cout << std::string(60, '=') << std::endl;
+        std::cout << "Total received from server: " << total_received.load() << " bytes" << std::endl;
+
+        // Get engine statistics
+        EngineStats stats = engine.getStats();
+        std::cout << "\nConnection Statistics:" << std::endl;
+        std::cout << "  Packets sent:     " << stats.packets_sent << std::endl;
+        std::cout << "  Packets received: " << stats.packets_received << std::endl;
+        std::cout << "  Packets lost:     " << stats.packets_lost << std::endl;
+        std::cout << "  Bytes sent:       " << stats.bytes_sent << std::endl;
+        std::cout << "  Bytes received:   " << stats.bytes_received << std::endl;
+        std::cout << "  RTT:              " << (stats.rtt_ns / 1000000.0) << " ms" << std::endl;
+        std::cout << "  CWND:             " << stats.cwnd << " bytes" << std::endl;
+        std::cout << std::string(60, '=') << std::endl;
 
         // Shutdown the engine (blocking, waits for graceful shutdown)
         engine.shutdown(0, "Test completed");

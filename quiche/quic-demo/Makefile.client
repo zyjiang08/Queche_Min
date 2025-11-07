@@ -1,0 +1,130 @@
+# QUIC Client Makefile (Cross-platform: iOS, Android, macOS, Linux)
+CXX = g++
+CXXFLAGS = -Wall -Wextra -O2 -g -std=c++11
+
+# Detect platform and architecture if not specified
+UNAME_S := $(shell uname -s)
+UNAME_M := $(shell uname -m)
+
+# Allow override via environment or command line
+PLATFORM ?= $(shell \
+	if [ "$(UNAME_S)" = "Darwin" ]; then \
+		echo "macos"; \
+	elif [ "$(UNAME_S)" = "Linux" ]; then \
+		echo "linux"; \
+	else \
+		echo "unknown"; \
+	fi)
+
+ARCH ?= $(shell \
+	if [ "$(UNAME_M)" = "x86_64" ]; then \
+		echo "x86_64"; \
+	elif [ "$(UNAME_M)" = "arm64" ] || [ "$(UNAME_M)" = "aarch64" ]; then \
+		echo "arm64"; \
+	else \
+		echo "$(UNAME_M)"; \
+	fi)
+
+# Platform-specific settings
+ifeq ($(PLATFORM),macos)
+    FRAMEWORK_FLAGS = -framework Security -framework Foundation
+else ifeq ($(PLATFORM),ios)
+    FRAMEWORK_FLAGS = -framework Security -framework Foundation
+else ifeq ($(PLATFORM),android)
+    FRAMEWORK_FLAGS =
+else ifeq ($(PLATFORM),linux)
+    FRAMEWORK_FLAGS =
+else
+    $(error Unsupported platform: $(PLATFORM). Use: macos, ios, android, or linux)
+endif
+
+# Directories
+SRC_DIR = src
+BUILD_DIR = build/$(PLATFORM)/$(ARCH)
+OUTPUT = quic-client-$(PLATFORM)-$(ARCH)
+
+# Library paths - use pre-built libquiche_engine for the platform
+LIB_ROOT = ../../lib
+LIB_DIR = $(LIB_ROOT)/$(PLATFORM)/$(ARCH)
+INCLUDE_ROOT = ../../include
+QUICHE_ENGINE_LIB = $(LIB_DIR)/libquiche_engine.a
+LOCAL_QUICHE_LIB = ./lib/libquiche.a
+
+# Check if library exists
+check-lib:
+	@if [ ! -f "$(QUICHE_ENGINE_LIB)" ]; then \
+		echo "✗ Error: quiche_engine library not found: $(QUICHE_ENGINE_LIB)"; \
+		echo ""; \
+		echo "Please build it first:"; \
+		echo "  cd ../.. && ./quiche_engine_all.sh $(PLATFORM) $(ARCH)"; \
+		echo ""; \
+		echo "Or use the build script:"; \
+		echo "  ./build_client.sh $(PLATFORM) $(ARCH)"; \
+		exit 1; \
+	fi
+
+# Compiler flags
+INCLUDES = -I./include -I$(INCLUDE_ROOT) -I/usr/local/include
+LDFLAGS = -L./lib -L/usr/local/lib $(FRAMEWORK_FLAGS)
+LIBS = $(QUICHE_ENGINE_LIB) -L./lib -lquiche -lpthread -ldl -lm
+
+# Source and object files
+CLIENT_SRC = $(SRC_DIR)/client.cpp
+CLIENT_OBJ = $(BUILD_DIR)/client.o
+
+# Default target
+all: check-lib $(BUILD_DIR) $(OUTPUT)
+
+# Create build directory
+$(BUILD_DIR):
+	@mkdir -p $(BUILD_DIR)
+
+# Build client
+$(OUTPUT): $(CLIENT_OBJ)
+	$(CXX) $(CXXFLAGS) $^ $(LDFLAGS) $(LIBS) -o $@
+	@echo "✓ Built $@ successfully (platform: $(PLATFORM), arch: $(ARCH))"
+	@echo "  Output: $(OUTPUT)"
+	@echo "  Size: $$(du -h $(OUTPUT) | cut -f1)"
+
+# Compile client object
+$(CLIENT_OBJ): $(CLIENT_SRC)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
+# Clean
+clean:
+	@rm -rf build quic-client-*
+	@echo "✓ Cleaned client build artifacts"
+
+# Clean specific platform/arch
+clean-target:
+	@rm -rf $(BUILD_DIR) $(OUTPUT)
+	@echo "✓ Cleaned $(PLATFORM)/$(ARCH) build artifacts"
+
+# Help
+help:
+	@echo "QUIC Client Makefile (Cross-platform)"
+	@echo ""
+	@echo "Usage:"
+	@echo "  make                          - Build for current platform/arch"
+	@echo "  make PLATFORM=ios ARCH=arm64  - Build for specific platform/arch"
+	@echo "  make clean                    - Remove all build artifacts"
+	@echo "  make clean-target             - Remove specific platform/arch artifacts"
+	@echo "  make help                     - Show this help message"
+	@echo ""
+	@echo "Supported platforms:"
+	@echo "  macos, ios, android, linux"
+	@echo ""
+	@echo "Supported architectures:"
+	@echo "  macOS:   arm64, x86_64"
+	@echo "  iOS:     arm64 (device), x86_64 (simulator)"
+	@echo "  Android: arm64-v8a, armeabi-v7a, x86, x86_64"
+	@echo "  Linux:   arm64, x86_64"
+	@echo ""
+	@echo "Current configuration:"
+	@echo "  Platform: $(PLATFORM)"
+	@echo "  Arch:     $(ARCH)"
+	@echo "  Output:   $(OUTPUT)"
+	@echo ""
+	@echo "For cross-platform builds, use: ./build_client.sh"
+
+.PHONY: all check-lib clean clean-target help

@@ -1,4 +1,7 @@
-# QUIC Demo - Client & Server
+# QUIC Demo - Main Makefile
+# This file provides convenient targets for building server and client
+# For more control, use Makefile.server and Makefile.client directly
+
 CC = gcc
 CXX = g++
 CFLAGS = -Wall -Wextra -O2 -g
