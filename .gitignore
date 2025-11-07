@@ -3,5 +3,5 @@
 **/Cargo.lock
 **/*.*qlog
 .cargo/config.toml
-libs/
-include/
+/lib/
+/include/

@@ -9,7 +9,8 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 QUICHE_DIR="${SCRIPT_DIR}"  # Build from workspace root, not quiche/ subdirectory
-OUTPUT_DIR="${SCRIPT_DIR}/libs"
+LIB_DIR="${SCRIPT_DIR}/lib"
+INCLUDE_DIR="${SCRIPT_DIR}/include"
 
 # Colors for output
 RED='\033[0;31m'
@@ -120,7 +121,7 @@ build_ios() {
     fi
 
     # Create output directory
-    mkdir -p "${OUTPUT_DIR}/ios/${arch}"
+    mkdir -p "${LIB_DIR}/ios/${arch}"
 
     # Combine all libraries into one fat static library
     echo_info "Combining libraries..."
@@ -135,7 +136,7 @@ build_ios() {
     # Method 1: Try libtool (recommended for macOS/iOS)
     if command -v libtool &> /dev/null; then
         echo_info "Using libtool to combine libraries..."
-        libtool -static -o "${OUTPUT_DIR}/ios/${arch}/libquiche_engine.a" \
+        libtool -static -o "${LIB_DIR}/ios/${arch}/libquiche_engine.a" \
             "$LIBQUICHE_PATH" \
             "${OUT_DIR}/libev.a" \
             "$ENGINE_LIB" \
@@ -156,31 +157,32 @@ build_ios() {
         ar -x "$LIBSSL_PATH"
 
         # Create combined archive
-        ar -rcs "${OUTPUT_DIR}/ios/${arch}/libquiche_engine.a" *.o
+        ar -rcs "${LIB_DIR}/ios/${arch}/libquiche_engine.a" *.o
 
         # Cleanup
         cd -
         rm -rf "$TEMP_DIR"
     fi
 
-    echo_info "iOS library created: ${OUTPUT_DIR}/ios/${arch}/libquiche_engine.a"
+    echo_info "iOS library created: ${LIB_DIR}/ios/${arch}/libquiche_engine.a"
 
     # Show library info
-    echo_info "Library size: $(du -h "${OUTPUT_DIR}/ios/${arch}/libquiche_engine.a" | cut -f1)"
+    echo_info "Library size: $(du -h "${LIB_DIR}/ios/${arch}/libquiche_engine.a" | cut -f1)"
 
     # Show library symbols (use llvm-nm from Rust toolchain, or skip if not available)
     echo_info "Library symbols (sample):"
     if command -v llvm-nm &> /dev/null; then
-        llvm-nm -g "${OUTPUT_DIR}/ios/${arch}/libquiche_engine.a" 2>/dev/null | grep -E "QuicheEngine|ev_run" | head -10 || echo_info "No symbols found (library is valid)"
+        llvm-nm -g "${LIB_DIR}/ios/${arch}/libquiche_engine.a" 2>/dev/null | grep -E "QuicheEngine|ev_run" | head -10 || echo_info "No symbols found (library is valid)"
     else
         echo_info "Note: llvm-nm not found, skipping symbol check (library is valid)"
         echo_info "You can verify symbols later with: llvm-nm or otool"
     fi
 
     # Copy header files (only once, shared by all platforms)
-    if [ ! -d "${OUTPUT_DIR}/include" ]; then
-        cp -r quiche/engine/include "${OUTPUT_DIR}/"
-        echo_info "Headers copied to: ${OUTPUT_DIR}/include/"
+    if [ ! -d "${INCLUDE_DIR}" ]; then
+        mkdir -p "${INCLUDE_DIR}"
+        cp quiche/engine/include/* "${INCLUDE_DIR}/"
+        echo_info "Headers copied to: ${INCLUDE_DIR}/"
     fi
 
     return 0
@@ -239,7 +241,7 @@ build_macos() {
     fi
 
     # Create output directory
-    mkdir -p "${OUTPUT_DIR}/macos/${arch}"
+    mkdir -p "${LIB_DIR}/macos/${arch}"
 
     # Combine all libraries into one static library
     echo_info "Combining libraries..."
@@ -254,7 +256,7 @@ build_macos() {
     # Method 1: Try libtool (recommended for macOS)
     if command -v libtool &> /dev/null; then
         echo_info "Using libtool to combine libraries..."
-        libtool -static -o "${OUTPUT_DIR}/macos/${arch}/libquiche_engine.a" \
+        libtool -static -o "${LIB_DIR}/macos/${arch}/libquiche_engine.a" \
             "$LIBQUICHE_PATH" \
             "${OUT_DIR}/libev.a" \
             "$ENGINE_LIB" \
@@ -275,31 +277,32 @@ build_macos() {
         ar -x "$LIBSSL_PATH"
 
         # Create combined archive
-        ar -rcs "${OUTPUT_DIR}/macos/${arch}/libquiche_engine.a" *.o
+        ar -rcs "${LIB_DIR}/macos/${arch}/libquiche_engine.a" *.o
 
         # Cleanup
         cd -
         rm -rf "$TEMP_DIR"
     fi
 
-    echo_info "macOS library created: ${OUTPUT_DIR}/macos/${arch}/libquiche_engine.a"
+    echo_info "macOS library created: ${LIB_DIR}/macos/${arch}/libquiche_engine.a"
 
     # Show library info
-    echo_info "Library size: $(du -h "${OUTPUT_DIR}/macos/${arch}/libquiche_engine.a" | cut -f1)"
+    echo_info "Library size: $(du -h "${LIB_DIR}/macos/${arch}/libquiche_engine.a" | cut -f1)"
 
     # Show library symbols (use llvm-nm from Rust toolchain, or skip if not available)
     echo_info "Library symbols (sample):"
     if command -v llvm-nm &> /dev/null; then
-        llvm-nm -g "${OUTPUT_DIR}/macos/${arch}/libquiche_engine.a" 2>/dev/null | grep -E "QuicheEngine|ev_run" | head -10 || echo_info "No symbols found (library is valid)"
+        llvm-nm -g "${LIB_DIR}/macos/${arch}/libquiche_engine.a" 2>/dev/null | grep -E "QuicheEngine|ev_run" | head -10 || echo_info "No symbols found (library is valid)"
     else
         echo_info "Note: llvm-nm not found, skipping symbol check (library is valid)"
         echo_info "You can verify symbols later with: llvm-nm or otool"
     fi
 
     # Copy header files (only once, shared by all platforms)
-    if [ ! -d "${OUTPUT_DIR}/include" ]; then
-        cp -r quiche/engine/include "${OUTPUT_DIR}/"
-        echo_info "Headers copied to: ${OUTPUT_DIR}/include/"
+    if [ ! -d "${INCLUDE_DIR}" ]; then
+        mkdir -p "${INCLUDE_DIR}"
+        cp quiche/engine/include/* "${INCLUDE_DIR}/"
+        echo_info "Headers copied to: ${INCLUDE_DIR}/"
     fi
 
     return 0
@@ -459,24 +462,25 @@ CARGO_CONFIG
     fi
 
     # Create output directory
-    mkdir -p "${OUTPUT_DIR}/android/${abi}"
+    mkdir -p "${LIB_DIR}/android/${abi}"
 
     # Copy shared library
-    cp "$SO_FILE" "${OUTPUT_DIR}/android/${abi}/"
+    cp "$SO_FILE" "${LIB_DIR}/android/${abi}/"
 
-    echo_info "Android library created: ${OUTPUT_DIR}/android/${abi}/libquiche_engine.so"
+    echo_info "Android library created: ${LIB_DIR}/android/${abi}/libquiche_engine.so"
 
     # Show library info
-    echo_info "Library size: $(du -h "${OUTPUT_DIR}/android/${abi}/libquiche_engine.so" | cut -f1)"
+    echo_info "Library size: $(du -h "${LIB_DIR}/android/${abi}/libquiche_engine.so" | cut -f1)"
     echo_info "Library dependencies:"
     if command -v readelf &> /dev/null; then
-        readelf -d "${OUTPUT_DIR}/android/${abi}/libquiche_engine.so" | grep NEEDED || true
+        readelf -d "${LIB_DIR}/android/${abi}/libquiche_engine.so" | grep NEEDED || true
     fi
 
     # Copy header files (only once, shared by all platforms)
-    if [ ! -d "${OUTPUT_DIR}/include" ]; then
-        cp -r quiche/engine/include "${OUTPUT_DIR}/"
-        echo_info "Headers copied to: ${OUTPUT_DIR}/include/"
+    if [ ! -d "${INCLUDE_DIR}" ]; then
+        mkdir -p "${INCLUDE_DIR}"
+        cp quiche/engine/include/* "${INCLUDE_DIR}/"
+        echo_info "Headers copied to: ${INCLUDE_DIR}/"
     fi
 
     return 0
@@ -493,123 +497,179 @@ main() {
     BUILD_IOS=false
     BUILD_MACOS=false
     BUILD_ANDROID=false
-    IOS_ARCH=""       # Specific iOS architecture to build (empty = arm64 default)
-    MACOS_ARCH=""     # Specific macOS architecture to build
-    ANDROID_ARCH=""   # Specific Android architecture to build
+    IOS_ARCHS=()       # Array of iOS architectures to build
+    MACOS_ARCHS=()     # Array of macOS architectures to build
+    ANDROID_ARCHS=()   # Array of Android architectures to build
 
     if [ $# -eq 0 ]; then
-        echo_info "Usage: $0 [ios[:arch]] [macos[:arch]] [android[:arch]] [all]"
+        echo_info "Usage: $0 <platform> [arch] [<platform> [arch] ...]"
         echo_info ""
-        echo_info "Options:"
-        echo_info "  ios                    - Build for iOS arm64 (device)"
-        echo_info "  ios:arm64              - Build for iOS arm64 (device) explicitly"
-        echo_info "  ios:x86_64             - Build for iOS simulator (x86_64)"
-        echo_info "  macos                  - Build for macOS (current architecture)"
-        echo_info "  macos:arm64            - Build for macOS Apple Silicon (M1/M2/M3)"
-        echo_info "  macos:x86_64           - Build for macOS Intel"
-        echo_info "  android                - Build for Android (all architectures)"
-        echo_info "  android:arm64-v8a      - Build for Android arm64-v8a only"
-        echo_info "  android:armeabi-v7a    - Build for Android armeabi-v7a only"
-        echo_info "  android:x86            - Build for Android x86 only"
-        echo_info "  android:x86_64         - Build for Android x86_64 only"
-        echo_info "  all                    - Build for all platforms"
+        echo_info "Platforms:"
+        echo_info "  ios [arch]          - Build for iOS"
+        echo_info "  macos [arch]        - Build for macOS"
+        echo_info "  android [arch]      - Build for Android"
+        echo_info "  all                 - Build for all platforms"
+        echo_info ""
+        echo_info "Architectures:"
+        echo_info "  iOS:     arm64 (device), x86_64 (simulator), all"
+        echo_info "  macOS:   arm64 (Apple Silicon), x86_64 (Intel), all"
+        echo_info "  Android: arm64-v8a, armeabi-v7a, x86, x86_64, all"
+        echo_info ""
+        echo_info "If [arch] is omitted:"
+        echo_info "  ios      - builds arm64 (device)"
+        echo_info "  macos    - builds current architecture"
+        echo_info "  android  - builds all architectures"
         echo_info ""
         echo_info "Examples:"
-        echo_info "  $0 ios                          # Build iOS arm64 (device)"
-        echo_info "  $0 ios:x86_64                   # Build iOS simulator"
-        echo_info "  $0 macos                        # Build macOS current arch"
-        echo_info "  $0 macos:arm64                  # Build macOS Apple Silicon"
-        echo_info "  $0 android                      # Build all Android architectures"
-        echo_info "  $0 android:arm64-v8a            # Build Android arm64 only"
-        echo_info "  $0 ios macos android:arm64-v8a  # Build iOS + macOS + Android"
+        echo_info "  $0 ios arm64                    # iOS device"
+        echo_info "  $0 ios x86_64                   # iOS simulator"
+        echo_info "  $0 ios all                      # All iOS architectures"
+        echo_info "  $0 macos arm64                  # macOS Apple Silicon"
+        echo_info "  $0 macos all                    # All macOS architectures"
+        echo_info "  $0 android arm64-v8a            # Android ARM64"
+        echo_info "  $0 android all                  # All Android architectures"
+        echo_info "  $0 ios arm64 android arm64-v8a  # iOS + Android"
+        echo_info "  $0 all                          # All platforms"
         echo_info ""
         exit 1
     fi
 
-    for arg in "$@"; do
+    # Parse arguments
+    i=1
+    while [ $i -le $# ]; do
+        arg="${!i}"
         case $arg in
             ios)
                 BUILD_IOS=true
-                IOS_ARCH="arm64"  # Default to arm64 (device)
-                ;;
-            ios:*)
-                BUILD_IOS=true
-                IOS_ARCH="${arg#ios:}"  # Extract architecture after ':'
-                # Validate architecture
-                case $IOS_ARCH in
-                    arm64|x86_64)
-                        echo_info "Will build iOS $IOS_ARCH"
-                        ;;
-                    *)
-                        echo_error "Invalid iOS architecture: $IOS_ARCH"
-                        echo_error "Valid options: arm64 (device), x86_64 (simulator)"
-                        exit 1
-                        ;;
-                esac
+                # Check if next arg is an architecture
+                next_i=$((i + 1))
+                if [ $next_i -le $# ]; then
+                    next_arg="${!next_i}"
+                    case $next_arg in
+                        arm64|x86_64)
+                            IOS_ARCHS+=("$next_arg")
+                            i=$next_i  # Skip next arg
+                            ;;
+                        all)
+                            IOS_ARCHS=("arm64" "x86_64")
+                            i=$next_i  # Skip next arg
+                            ;;
+                        ios|macos|android|all)
+                            # Next arg is another platform, use default
+                            IOS_ARCHS+=("arm64")
+                            ;;
+                        *)
+                            echo_error "Invalid iOS architecture: $next_arg"
+                            echo_error "Valid options: arm64, x86_64, all"
+                            exit 1
+                            ;;
+                    esac
+                else
+                    # No next arg, use default
+                    IOS_ARCHS+=("arm64")
+                fi
                 ;;
             macos)
                 BUILD_MACOS=true
-                # Detect current architecture
-                if [ "$(uname -m)" = "arm64" ]; then
-                    MACOS_ARCH="arm64"
+                # Check if next arg is an architecture
+                next_i=$((i + 1))
+                if [ $next_i -le $# ]; then
+                    next_arg="${!next_i}"
+                    case $next_arg in
+                        arm64|x86_64)
+                            MACOS_ARCHS+=("$next_arg")
+                            i=$next_i  # Skip next arg
+                            ;;
+                        all)
+                            MACOS_ARCHS=("arm64" "x86_64")
+                            i=$next_i  # Skip next arg
+                            ;;
+                        ios|macos|android|all)
+                            # Next arg is another platform, auto-detect
+                            if [ "$(uname -m)" = "arm64" ]; then
+                                MACOS_ARCHS+=("arm64")
+                            else
+                                MACOS_ARCHS+=("x86_64")
+                            fi
+                            ;;
+                        *)
+                            echo_error "Invalid macOS architecture: $next_arg"
+                            echo_error "Valid options: arm64, x86_64, all"
+                            exit 1
+                            ;;
+                    esac
                 else
-                    MACOS_ARCH="x86_64"
+                    # No next arg, auto-detect
+                    if [ "$(uname -m)" = "arm64" ]; then
+                        MACOS_ARCHS+=("arm64")
+                    else
+                        MACOS_ARCHS+=("x86_64")
+                    fi
                 fi
-                echo_info "Will build macOS $MACOS_ARCH (auto-detected)"
-                ;;
-            macos:*)
-                BUILD_MACOS=true
-                MACOS_ARCH="${arg#macos:}"  # Extract architecture after ':'
-                # Validate architecture
-                case $MACOS_ARCH in
-                    arm64|x86_64)
-                        echo_info "Will build macOS $MACOS_ARCH"
-                        ;;
-                    *)
-                        echo_error "Invalid macOS architecture: $MACOS_ARCH"
-                        echo_error "Valid options: arm64 (Apple Silicon), x86_64 (Intel)"
-                        exit 1
-                        ;;
-                esac
                 ;;
             android)
                 BUILD_ANDROID=true
-                ANDROID_ARCH=""  # Build all architectures
-                ;;
-            android:*)
-                BUILD_ANDROID=true
-                ANDROID_ARCH="${arg#android:}"  # Extract architecture after ':'
-                # Validate architecture
-                case $ANDROID_ARCH in
-                    arm64-v8a|armeabi-v7a|x86|x86_64)
-                        echo_info "Will build Android $ANDROID_ARCH"
-                        ;;
-                    *)
-                        echo_error "Invalid Android architecture: $ANDROID_ARCH"
-                        echo_error "Valid options: arm64-v8a, armeabi-v7a, x86, x86_64"
-                        exit 1
-                        ;;
-                esac
+                # Check if next arg is an architecture
+                next_i=$((i + 1))
+                if [ $next_i -le $# ]; then
+                    next_arg="${!next_i}"
+                    case $next_arg in
+                        arm64-v8a|armeabi-v7a|x86|x86_64)
+                            ANDROID_ARCHS+=("$next_arg")
+                            i=$next_i  # Skip next arg
+                            ;;
+                        all)
+                            ANDROID_ARCHS=("arm64-v8a" "armeabi-v7a" "x86" "x86_64")
+                            i=$next_i  # Skip next arg
+                            ;;
+                        ios|macos|android|all)
+                            # Next arg is another platform, build all
+                            ANDROID_ARCHS=("arm64-v8a" "armeabi-v7a" "x86" "x86_64")
+                            ;;
+                        *)
+                            echo_error "Invalid Android architecture: $next_arg"
+                            echo_error "Valid options: arm64-v8a, armeabi-v7a, x86, x86_64, all"
+                            exit 1
+                            ;;
+                    esac
+                else
+                    # No next arg, build all architectures
+                    ANDROID_ARCHS=("arm64-v8a" "armeabi-v7a" "x86" "x86_64")
+                fi
                 ;;
             all)
                 BUILD_IOS=true
                 BUILD_MACOS=true
                 BUILD_ANDROID=true
-                IOS_ARCH="arm64"  # Default to arm64 for 'all'
+                IOS_ARCHS=("arm64")  # Default to arm64 for 'all'
                 # Auto-detect macOS architecture
                 if [ "$(uname -m)" = "arm64" ]; then
-                    MACOS_ARCH="arm64"
+                    MACOS_ARCHS=("arm64")
                 else
-                    MACOS_ARCH="x86_64"
+                    MACOS_ARCHS=("x86_64")
                 fi
-                ANDROID_ARCH=""   # Build all architectures
+                ANDROID_ARCHS=("arm64-v8a" "armeabi-v7a" "x86" "x86_64")
                 ;;
             *)
                 echo_error "Unknown option: $arg"
+                echo_info "Run '$0' without arguments to see usage"
                 exit 1
                 ;;
         esac
+        i=$((i + 1))
     done
+
+    # Display build plan
+    echo_info "Build plan:"
+    if [ "$BUILD_IOS" = true ]; then
+        echo_info "  iOS: ${IOS_ARCHS[*]}"
+    fi
+    if [ "$BUILD_MACOS" = true ]; then
+        echo_info "  macOS: ${MACOS_ARCHS[*]}"
+    fi
+    if [ "$BUILD_ANDROID" = true ]; then
+        echo_info "  Android: ${ANDROID_ARCHS[*]}"
+    fi
 
     # Check and initialize git submodules before building
     echo_info ""
@@ -620,50 +680,54 @@ main() {
 
     # Build for iOS
     if [ "$BUILD_IOS" = true ]; then
-        # Map architecture to Rust target
-        case $IOS_ARCH in
-            arm64)
-                IOS_TARGET="aarch64-apple-ios"
-                ;;
-            x86_64)
-                IOS_TARGET="x86_64-apple-ios"
-                ;;
-            *)
-                echo_error "Unknown iOS architecture: $IOS_ARCH"
-                exit 1
-                ;;
-        esac
+        for arch in "${IOS_ARCHS[@]}"; do
+            # Map architecture to Rust target
+            case $arch in
+                arm64)
+                    target="aarch64-apple-ios"
+                    ;;
+                x86_64)
+                    target="x86_64-apple-ios"
+                    ;;
+                *)
+                    echo_error "Unknown iOS architecture: $arch"
+                    exit 1
+                    ;;
+            esac
 
-        if build_ios "$IOS_ARCH" "$IOS_TARGET"; then
-            echo_info "✓ iOS $IOS_ARCH build successful"
-        else
-            echo_error "✗ iOS $IOS_ARCH build failed"
-            exit 1
-        fi
+            if build_ios "$arch" "$target"; then
+                echo_info "✓ iOS $arch build successful"
+            else
+                echo_error "✗ iOS $arch build failed"
+                exit 1
+            fi
+        done
     fi
 
     # Build for macOS
     if [ "$BUILD_MACOS" = true ]; then
-        # Map architecture to Rust target
-        case $MACOS_ARCH in
-            arm64)
-                MACOS_TARGET="aarch64-apple-darwin"
-                ;;
-            x86_64)
-                MACOS_TARGET="x86_64-apple-darwin"
-                ;;
-            *)
-                echo_error "Unknown macOS architecture: $MACOS_ARCH"
-                exit 1
-                ;;
-        esac
+        for arch in "${MACOS_ARCHS[@]}"; do
+            # Map architecture to Rust target
+            case $arch in
+                arm64)
+                    target="aarch64-apple-darwin"
+                    ;;
+                x86_64)
+                    target="x86_64-apple-darwin"
+                    ;;
+                *)
+                    echo_error "Unknown macOS architecture: $arch"
+                    exit 1
+                    ;;
+            esac
 
-        if build_macos "$MACOS_ARCH" "$MACOS_TARGET"; then
-            echo_info "✓ macOS $MACOS_ARCH build successful"
-        else
-            echo_error "✗ macOS $MACOS_ARCH build failed"
-            exit 1
-        fi
+            if build_macos "$arch" "$target"; then
+                echo_info "✓ macOS $arch build successful"
+            else
+                echo_error "✗ macOS $arch build failed"
+                exit 1
+            fi
+        done
     fi
 
     # Build for Android
@@ -716,42 +780,23 @@ main() {
             esac
         }
 
-        # If specific architecture is requested
-        if [ -n "$ANDROID_ARCH" ]; then
-            echo_info "Building Android $ANDROID_ARCH only..."
-            target=$(get_android_target "$ANDROID_ARCH")
+        # Build all requested Android architectures
+        for abi in "${ANDROID_ARCHS[@]}"; do
+            target=$(get_android_target "$abi")
             toolchain=$(get_android_toolchain "$target")
 
             if [ -z "$target" ]; then
-                echo_error "Unknown Android architecture: $ANDROID_ARCH"
+                echo_error "Unknown Android architecture: $abi"
                 exit 1
             fi
 
-            if build_android "$target" "$target" "$ANDROID_ARCH" "$toolchain"; then
-                echo_info "✓ Android $ANDROID_ARCH build successful"
+            if build_android "$target" "$target" "$abi" "$toolchain"; then
+                echo_info "✓ Android $abi build successful"
             else
-                echo_error "✗ Android $ANDROID_ARCH build failed"
+                echo_error "✗ Android $abi build failed"
                 exit 1
             fi
-        else
-            # Build all Android architectures
-            echo_info "Building all Android architectures..."
-
-            # List of all ABIs to build
-            ANDROID_ABIS="arm64-v8a armeabi-v7a x86 x86_64"
-
-            for abi in $ANDROID_ABIS; do
-                target=$(get_android_target "$abi")
-                toolchain=$(get_android_toolchain "$target")
-
-                if build_android "$target" "$target" "$abi" "$toolchain"; then
-                    echo_info "✓ Android $abi build successful"
-                else
-                    echo_error "✗ Android $abi build failed"
-                    exit 1
-                fi
-            done
-        fi
+        done
     fi
 
     echo_info ""
@@ -759,29 +804,37 @@ main() {
     echo_info "Build completed successfully!"
     echo_info "============================================"
     echo_info ""
-    echo_info "Output directory: $OUTPUT_DIR"
+    echo_info "Output structure:"
+    echo_info "  lib/       - Platform libraries"
+    echo_info "  include/   - Header files"
     echo_info ""
 
     if [ "$BUILD_IOS" = true ]; then
         echo_info "iOS libraries:"
-        find "$OUTPUT_DIR/ios" -name "*.a" -exec echo "  {}" \;
+        find "$LIB_DIR/ios" -name "*.a" -exec echo "  {}" \; 2>/dev/null || true
     fi
 
     if [ "$BUILD_MACOS" = true ]; then
         echo_info "macOS libraries:"
-        find "$OUTPUT_DIR/macos" -name "*.a" -exec echo "  {}" \;
+        find "$LIB_DIR/macos" -name "*.a" -exec echo "  {}" \; 2>/dev/null || true
     fi
 
     if [ "$BUILD_ANDROID" = true ]; then
         echo_info "Android libraries:"
-        find "$OUTPUT_DIR/android" -name "*.so" -exec echo "  {}" \;
+        find "$LIB_DIR/android" -name "*.so" -exec echo "  {}" \; 2>/dev/null || true
+    fi
+
+    echo_info ""
+    echo_info "Header files:"
+    if [ -d "$INCLUDE_DIR" ]; then
+        find "$INCLUDE_DIR" -name "*.h" -exec echo "  {}" \;
     fi
 
     echo_info ""
     echo_info "Next steps:"
-    echo_info "  1. Copy the libraries to your project"
-    echo_info "  2. Copy the header files from include/ directory"
-    echo_info "  3. Link against the libraries in your project"
+    echo_info "  1. Copy lib/ and include/ to your project"
+    echo_info "  2. Link against the libraries in your project"
+    echo_info "  3. Include the header files: #include \"quiche_engine.h\""
 }
 
 # Run main function
