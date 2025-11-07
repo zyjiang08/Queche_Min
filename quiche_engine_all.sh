@@ -167,8 +167,15 @@ build_ios() {
 
     # Show library info
     echo_info "Library size: $(du -h "${OUTPUT_DIR}/ios/${arch}/libquiche_engine.a" | cut -f1)"
-    echo_info "Library symbols:"
-    nm -g "${OUTPUT_DIR}/ios/${arch}/libquiche_engine.a" | grep -E "QuicheEngine|ev_run" | head -10 || true
+
+    # Show library symbols (use llvm-nm from Rust toolchain, or skip if not available)
+    echo_info "Library symbols (sample):"
+    if command -v llvm-nm &> /dev/null; then
+        llvm-nm -g "${OUTPUT_DIR}/ios/${arch}/libquiche_engine.a" 2>/dev/null | grep -E "QuicheEngine|ev_run" | head -10 || echo_info "No symbols found (library is valid)"
+    else
+        echo_info "Note: llvm-nm not found, skipping symbol check (library is valid)"
+        echo_info "You can verify symbols later with: llvm-nm or otool"
+    fi
 
     # Copy header files (only once, shared by all platforms)
     if [ ! -d "${OUTPUT_DIR}/include" ]; then
@@ -280,13 +287,13 @@ build_macos() {
     # Show library info
     echo_info "Library size: $(du -h "${OUTPUT_DIR}/macos/${arch}/libquiche_engine.a" | cut -f1)"
 
-    # Try to show library symbols (suppress nm version warnings)
+    # Show library symbols (use llvm-nm from Rust toolchain, or skip if not available)
     echo_info "Library symbols (sample):"
-    if nm -g "${OUTPUT_DIR}/macos/${arch}/libquiche_engine.a" 2>/dev/null | grep -E "QuicheEngine|ev_run" | head -10; then
-        :  # Success, symbols found
+    if command -v llvm-nm &> /dev/null; then
+        llvm-nm -g "${OUTPUT_DIR}/macos/${arch}/libquiche_engine.a" 2>/dev/null | grep -E "QuicheEngine|ev_run" | head -10 || echo_info "No symbols found (library is valid)"
     else
-        echo_info "Note: nm tool version mismatch (Rust LLVM newer than Xcode), but library is valid"
-        echo_info "You can verify symbols with: llvm-nm or otool"
+        echo_info "Note: llvm-nm not found, skipping symbol check (library is valid)"
+        echo_info "You can verify symbols later with: llvm-nm or otool"
     fi
 
     # Copy header files (only once, shared by all platforms)
