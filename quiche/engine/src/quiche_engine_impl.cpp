@@ -646,7 +646,7 @@ void QuicheEngineImpl::processCommands() {
             case CommandType::WRITE: {
                 // No locking needed - called only from event loop thread!
                 if (mConn) {
-                    uint64_t error_code;
+                    uint64_t error_code = 0;
                     ssize_t written = quiche_conn_stream_send(
                         mConn,
                         cmd->params.write.stream_id,
@@ -656,8 +656,10 @@ void QuicheEngineImpl::processCommands() {
                         &error_code
                     );
 
-                    if (written < 0) {
-                        std::cerr << "[ENGINE] Write failed: error_code=" << error_code << std::endl;
+                    if (written < 0 && written != -1) {
+                        // Only log real errors, not QUICHE_ERR_DONE (-1)
+                        std::cerr << "[ENGINE] Write failed: written=" << written
+                                  << ", error_code=" << error_code << std::endl;
                     }
 
                     flushEgress();
