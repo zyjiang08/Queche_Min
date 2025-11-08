@@ -74,8 +74,8 @@ debug = true
 
 # ============ 体积优化配置 ============
 [profile.release]
-# LTO在跨语言链接时会导致兼容性问题，暂时禁用
-# lto = "thin"
+# 使用thin LTO（Android NDK最佳平衡：体积小、编译快、兼容性好）
+lto = "thin"             # Thin LTO（编译快，效果好）
 codegen-units = 1        # 单个codegen单元以最大化优化
 opt-level = "z"          # 优化体积
 strip = false            # 不strip静态库，在最终二进制上strip
