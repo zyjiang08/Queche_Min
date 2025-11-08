@@ -11,6 +11,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 QUICHE_DIR="${SCRIPT_DIR}"  # Build from workspace root, not quiche/ subdirectory
 LIB_DIR="${SCRIPT_DIR}/lib"
 INCLUDE_DIR="${SCRIPT_DIR}/include"
+DEFAULT_TARGET_DIR="${QUICHE_DIR}/target"
+TARGET_DIR="${MOBILE_CARGO_TARGET_DIR:-${DEFAULT_TARGET_DIR}}"
+mkdir -p "$TARGET_DIR"
+export CARGO_TARGET_DIR="$TARGET_DIR"
+
+DEFAULT_MOBILE_FEATURES="boringssl-vendored,ffi,cpp-engine,qlog"
+MOBILE_FEATURES="${MOBILE_FEATURES:-$DEFAULT_MOBILE_FEATURES}"
+MOBILE_ANDROID_FEATURES="${MOBILE_ANDROID_FEATURES:-$MOBILE_FEATURES}"
+MOBILE_IOS_FEATURES="${MOBILE_IOS_FEATURES:-$MOBILE_FEATURES}"
+MOBILE_MACOS_FEATURES="${MOBILE_MACOS_FEATURES:-$MOBILE_FEATURES}"
 
 # Colors for output
 RED='\033[0;31m'
@@ -28,6 +38,193 @@ echo_warn() {
 
 echo_error() {
     echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Detect strip tool (prefer NDK llvm-strip, fall back to host tools).
+detect_strip_tool() {
+    local strip_tool=""
+
+    if [ -n "${NDK_BIN:-}" ] && [ -x "${NDK_BIN}/llvm-strip" ]; then
+        strip_tool="${NDK_BIN}/llvm-strip"
+    elif command -v llvm-strip > /dev/null 2>&1; then
+        strip_tool=$(command -v llvm-strip)
+    elif command -v strip > /dev/null 2>&1; then
+        strip_tool=$(command -v strip)
+    fi
+
+    echo "$strip_tool"
+}
+
+# Run size tool (llvm-size or size) on a binary and append to report file.
+run_size_tool() {
+    local binary_path="$1"
+    local report_file="$2"
+    local size_tool=""
+
+    if command -v llvm-size > /dev/null 2>&1; then
+        size_tool=$(command -v llvm-size)
+    elif command -v size > /dev/null 2>&1; then
+        size_tool=$(command -v size)
+    fi
+
+    if [ -n "$size_tool" ]; then
+        {
+            echo "### $(basename "$size_tool") output for $(basename "$binary_path")"
+            "$size_tool" "$binary_path"
+            echo ""
+        } >> "$report_file"
+    else
+        {
+            echo "### Size tool"
+            echo "- Not found on PATH"
+            echo ""
+        } >> "$report_file"
+    fi
+}
+
+strip_shared_library() {
+    local binary_path="$1"
+    local strip_tool
+    strip_tool=$(detect_strip_tool)
+
+    if [ -z "$strip_tool" ]; then
+        echo_warn "Strip tool not found; keeping unstripped binary"
+        return
+    fi
+
+    local dbg_path="${binary_path}.dbg"
+    cp "$binary_path" "$dbg_path"
+    if "$strip_tool" --strip-unneeded "$binary_path"; then
+        echo_info "Stripped $(basename "$binary_path") (debug copy: $(basename "$dbg_path"))"
+    else
+        echo_warn "Failed to strip $(basename "$binary_path")"
+        rm -f "$dbg_path"
+    fi
+}
+
+write_size_report() {
+    local platform="$1"
+    local arch="$2"
+    local so_path="$3"
+    local static_path="$4"
+
+    local report_dir="${SCRIPT_DIR}/docs/size-analysis"
+    mkdir -p "$report_dir"
+    local report_file="${report_dir}/latest-${platform}-${arch}.md"
+
+    {
+        echo "# ${platform^} ${arch} Build Report"
+        echo "- Generated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+        echo "- Commit: $(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+        echo ""
+        if [ -f "$so_path" ]; then
+            echo "## Shared Library"
+            echo "- Path: $so_path"
+            echo "- Size: $(du -h "$so_path" | cut -f1)"
+            echo ""
+        else
+            echo "## Shared Library"
+            echo "- Missing ($so_path)"
+            echo ""
+        fi
+        if [ -f "$static_path" ]; then
+            echo "## Static Library"
+            echo "- Path: $static_path"
+            echo "- Size: $(du -h "$static_path" | cut -f1)"
+            echo ""
+        else
+            echo "## Static Library"
+            echo "- Missing ($static_path)"
+            echo ""
+        fi
+    } > "$report_file"
+
+    if [ -f "$so_path" ]; then
+        run_size_tool "$so_path" "$report_file"
+    fi
+
+    echo_info "Wrote size report: $report_file"
+}
+
+get_platform_features() {
+    local platform="$1"
+    case "$platform" in
+        android)
+            echo "$MOBILE_ANDROID_FEATURES"
+            ;;
+        ios)
+            echo "$MOBILE_IOS_FEATURES"
+            ;;
+        macos)
+            echo "$MOBILE_MACOS_FEATURES"
+            ;;
+        *)
+            echo "$MOBILE_FEATURES"
+            ;;
+    esac
+}
+
+# Enable minimal BoringSSL mode by default to strip error strings / stdio.
+if [ -z "${QUICHE_MINIMAL_BSSL:-}" ]; then
+    export QUICHE_MINIMAL_BSSL=1
+    echo_info "QUICHE_MINIMAL_BSSL enabled (strips BoringSSL error strings / stdio)"
+else
+    echo_info "QUICHE_MINIMAL_BSSL already set to ${QUICHE_MINIMAL_BSSL}"
+fi
+
+# Ensure temporary files live on the same filesystem as the workspace to avoid
+# cross-device rename errors when Cargo persists artifacts.
+TMP_DIR_LOCAL="${TARGET_DIR}/tmp"
+mkdir -p "$TMP_DIR_LOCAL"
+export TMPDIR="$TMP_DIR_LOCAL"
+export CARGO_TARGET_TMPDIR="$TMP_DIR_LOCAL"
+export RUSTC_TMPDIR="$TMP_DIR_LOCAL"
+echo_info "TMPDIR set to $TMP_DIR_LOCAL"
+
+# Determine the latest quiche build directory inside a target's build path.
+# Uses python when available (works on macOS/Linux) and falls back to shell utilities.
+get_latest_quiche_build_dir() {
+    local build_root="$1"
+
+    if [ ! -d "$build_root" ]; then
+        return 0
+    fi
+
+    local latest_dir=""
+
+    if command -v python3 >/dev/null 2>&1; then
+        latest_dir=$(python3 - "$build_root" <<'PY'
+import os, sys
+root = sys.argv[1]
+latest = ""
+latest_mtime = -1.0
+if os.path.isdir(root):
+    for name in os.listdir(root):
+        if not name.startswith("quiche-"):
+            continue
+        path = os.path.join(root, name)
+        if not os.path.isdir(path):
+            continue
+        mtime = os.path.getmtime(path)
+        if mtime > latest_mtime:
+            latest_mtime = mtime
+            latest = path
+if latest:
+    print(latest)
+PY
+)
+    else
+        shopt -s nullglob
+        local candidates=("$build_root"/quiche-*)
+        shopt -u nullglob
+        if [ ${#candidates[@]} -gt 0 ]; then
+            latest_dir=$(ls -td "${candidates[@]}" 2>/dev/null | head -1)
+        fi
+    fi
+
+    if [ -n "$latest_dir" ]; then
+        echo "$latest_dir"
+    fi
 }
 
 # Check and initialize git submodules
@@ -82,14 +279,25 @@ build_ios() {
     # Add iOS target if not already installed
     rustup target add "$target" || true
 
-    # Build quiche for iOS (disable HTTP/3 for size optimization: 30-40% smaller)
+    local ios_features
+    ios_features=$(get_platform_features "ios")
+    local ios_feature_args=()
+    if [ -n "$ios_features" ]; then
+        ios_feature_args+=(--features "$ios_features")
+    fi
+
+    # Build quiche for iOS with customizable feature set
     cargo build --lib --release --target "$target" \
         --no-default-features \
-        --features boringssl-vendored,ffi,cpp-engine
+        "${ios_feature_args[@]}"
 
     # Find the build output directory
-    BUILD_DIR="target/${target}/release/build"
-    QUICHE_BUILD=$(find "$BUILD_DIR" -name "quiche-*" -type d -exec stat -f "%m %N" {} \; | sort -rn | head -1 | cut -d' ' -f2-)
+    BUILD_DIR="${TARGET_DIR}/${target}/release/build"
+    QUICHE_BUILD=$(get_latest_quiche_build_dir "$BUILD_DIR")
+    if [ -z "$QUICHE_BUILD" ]; then
+        echo_error "Could not locate build output in $BUILD_DIR"
+        return 1
+    fi
     OUT_DIR="${QUICHE_BUILD}/out"
 
     echo_info "Build output directory: $OUT_DIR"
@@ -106,7 +314,7 @@ build_ios() {
     fi
 
     # Get the main quiche library
-    LIBQUICHE_PATH="target/${target}/release/libquiche.a"
+    LIBQUICHE_PATH="${TARGET_DIR}/${target}/release/libquiche.a"
     if [ ! -f "$LIBQUICHE_PATH" ]; then
         echo_error "libquiche.a not found at $LIBQUICHE_PATH"
         return 1
@@ -204,14 +412,25 @@ build_macos() {
     # Add macOS target if not already installed
     rustup target add "$target" || true
 
-    # Build quiche for macOS (disable HTTP/3 for size optimization: 30-40% smaller)
+    local macos_features
+    macos_features=$(get_platform_features "macos")
+    local macos_feature_args=()
+    if [ -n "$macos_features" ]; then
+        macos_feature_args+=(--features "$macos_features")
+    fi
+
+    # Build quiche for macOS with customizable features
     cargo build --lib --release --target "$target" \
         --no-default-features \
-        --features boringssl-vendored,ffi,cpp-engine
+        "${macos_feature_args[@]}"
 
     # Find the build output directory
-    BUILD_DIR="target/${target}/release/build"
-    QUICHE_BUILD=$(find "$BUILD_DIR" -name "quiche-*" -type d -exec stat -f "%m %N" {} \; | sort -rn | head -1 | cut -d' ' -f2-)
+    BUILD_DIR="${TARGET_DIR}/${target}/release/build"
+    QUICHE_BUILD=$(get_latest_quiche_build_dir "$BUILD_DIR")
+    if [ -z "$QUICHE_BUILD" ]; then
+        echo_error "Could not locate build output in $BUILD_DIR"
+        return 1
+    fi
     OUT_DIR="${QUICHE_BUILD}/out"
 
     echo_info "Build output directory: $OUT_DIR"
@@ -228,7 +447,7 @@ build_macos() {
     fi
 
     # Get the main quiche library
-    LIBQUICHE_PATH="target/${target}/release/libquiche.a"
+    LIBQUICHE_PATH="${TARGET_DIR}/${target}/release/libquiche.a"
     if [ ! -f "$LIBQUICHE_PATH" ]; then
         echo_error "libquiche.a not found at $LIBQUICHE_PATH"
         return 1
@@ -397,96 +616,94 @@ CARGO_CONFIG
     echo_info "Using CXX: ${NDK_BIN}/${toolchain}${ANDROID_API_LEVEL}-clang++"
     echo_info "Using AR: ${NDK_BIN}/llvm-ar"
 
+    local android_features
+    android_features=$(get_platform_features "android")
+    local android_feature_args=()
+    if [ -n "$android_features" ]; then
+        android_feature_args+=(--features "$android_features")
+    fi
+
     # Step 1: Build libquiche.a (Rust QUIC library with FFI symbols)
     echo_info "Building libquiche.a (Rust QUIC library with FFI)..."
-    cargo rustc -p quiche --release --target "$target" --no-default-features --features ffi,boringssl-vendored --crate-type staticlib --lib
+    cargo rustc -p quiche --release --target "$target" --no-default-features \
+        "${android_feature_args[@]}" --crate-type staticlib --lib
 
     # Verify libquiche.a was created
-    LIBQUICHE_PATH="target/${target}/release/libquiche.a"
+    LIBQUICHE_PATH="${TARGET_DIR}/${target}/release/libquiche.a"
     if [ ! -f "$LIBQUICHE_PATH" ]; then
         echo_error "Failed to generate libquiche.a at $LIBQUICHE_PATH"
         return 1
     fi
     echo_info "✓ libquiche.a generated successfully: $(du -h "$LIBQUICHE_PATH" | cut -f1)"
 
-    # Step 2: Build C++ engine and link everything together (disable HTTP/3 for size: 30-40% smaller)
+    # Step 2: Build C++ engine and link everything together (feature set customizable)
     echo_info "Building C++ engine (will link with libquiche.a)..."
     cargo build --lib --release --target "$target" \
         --no-default-features \
-        --features boringssl-vendored,ffi,cpp-engine
+        "${android_feature_args[@]}"
 
     # Find the build output directory
-    BUILD_DIR="target/${target}/release/build"
-    QUICHE_BUILD=$(find "$BUILD_DIR" -name "quiche-*" -type d -exec stat -f "%m %N" {} \; | sort -rn | head -1 | cut -d' ' -f2-)
+    BUILD_DIR="${TARGET_DIR}/${target}/release/build"
+    QUICHE_BUILD=$(get_latest_quiche_build_dir "$BUILD_DIR")
+    if [ -z "$QUICHE_BUILD" ]; then
+        echo_error "Could not locate build output in $BUILD_DIR"
+        return 1
+    fi
     OUT_DIR="${QUICHE_BUILD}/out"
 
     echo_info "Build output directory: $OUT_DIR"
 
-    # Check if shared library was created
+    # Always relink shared library to apply export controls
     SO_FILE="${OUT_DIR}/libquiche_engine.so"
-    if [ -f "$SO_FILE" ]; then
-        echo_info "Found shared library: $SO_FILE"
+    LIBQUICHE_PATH="${TARGET_DIR}/${target}/release/libquiche.a"
+
+    if [ ! -f "$LIBQUICHE_PATH" ]; then
+        echo_error "Required library not found: libquiche.a ($LIBQUICHE_PATH)"
+        return 1
+    fi
+
+    local export_map="${SCRIPT_DIR}/tools/mobile/exported_symbols.map"
+    local version_script_args=()
+    if [ -f "$export_map" ]; then
+        version_script_args+=(-Wl,--version-script="$export_map")
     else
-        echo_warn "Shared library not found, will create it manually..."
+        echo_warn "Export map not found at $export_map; exporting all symbols"
+    fi
 
-        # Get paths to static libraries
-        LIBQUICHE_PATH="target/${target}/release/libquiche.a"
-        LIBEV_PATH="${OUT_DIR}/libev.a"
-        LIBENGINE_PATH="${OUT_DIR}/libquiche_engine.a"
-        LIBCRYPTO_PATH="${OUT_DIR}/build/libcrypto.a"
-        LIBSSL_PATH="${OUT_DIR}/build/libssl.a"
+    local ndk_compiler="${NDK_BIN}/${toolchain}${ANDROID_API_LEVEL}-clang++"
+    if [ ! -f "$ndk_compiler" ]; then
+        echo_error "NDK compiler not found: $ndk_compiler"
+        return 1
+    fi
 
-        # Check if all libraries exist
-        if [ ! -f "$LIBQUICHE_PATH" ] || [ ! -f "$LIBEV_PATH" ] || [ ! -f "$LIBENGINE_PATH" ] || [ ! -f "$LIBCRYPTO_PATH" ] || [ ! -f "$LIBSSL_PATH" ]; then
-            echo_error "One or more required libraries not found:"
-            echo_error "  libquiche.a: $([ -f "$LIBQUICHE_PATH" ] && echo "✓" || echo "✗")"
-            echo_error "  libev.a: $([ -f "$LIBEV_PATH" ] && echo "✓" || echo "✗")"
-            echo_error "  libquiche_engine.a: $([ -f "$LIBENGINE_PATH" ] && echo "✓" || echo "✗")"
-            echo_error "  libcrypto.a (BoringSSL): $([ -f "$LIBCRYPTO_PATH" ] && echo "✓" || echo "✗")"
-            echo_error "  libssl.a (BoringSSL): $([ -f "$LIBSSL_PATH" ] && echo "✓" || echo "✗")"
-            return 1
-        fi
-
-        # Use the NDK compiler path we set earlier
-        NDK_COMPILER="${NDK_BIN}/${toolchain}${ANDROID_API_LEVEL}-clang++"
-
-        if [ ! -f "$NDK_COMPILER" ]; then
-            echo_error "NDK compiler not found: $NDK_COMPILER"
-            return 1
-        fi
-
-        # Create shared library
-        echo_info "Creating shared library with $NDK_COMPILER..."
-        echo_info "Linking libraries: libquiche.a, libev.a, libquiche_engine.a, libcrypto.a, libssl.a"
-        "$NDK_COMPILER" \
-            -shared \
-            -o "$SO_FILE" \
-            -Wl,--whole-archive \
-            "$LIBQUICHE_PATH" \
-            "$LIBEV_PATH" \
-            "$LIBENGINE_PATH" \
-            "$LIBCRYPTO_PATH" \
-            "$LIBSSL_PATH" \
-            -Wl,--no-whole-archive \
-            -lc++_shared \
-            -llog \
-            -lm
-
-        if [ $? -eq 0 ]; then
-            echo_info "Shared library created successfully"
-        else
-            echo_error "Failed to create shared library"
-            return 1
-        fi
+    echo_info "Linking shared library with $ndk_compiler (using version script)..."
+    if "$ndk_compiler" \
+        -shared \
+        -o "$SO_FILE" \
+        -Wl,--whole-archive \
+        "$LIBQUICHE_PATH" \
+        -Wl,--no-whole-archive \
+        "${version_script_args[@]}" \
+        -lc++_shared \
+        -llog \
+        -lm; then
+        echo_info "Shared library created successfully"
+    else
+        echo_error "Failed to create shared library"
+        return 1
     fi
 
     # Create output directory
     mkdir -p "${LIB_DIR}/android/${abi}"
 
     # Copy shared library
-    cp "$SO_FILE" "${LIB_DIR}/android/${abi}/"
+    local so_dest="${LIB_DIR}/android/${abi}/libquiche_engine.so"
+    cp "$SO_FILE" "$so_dest"
 
-    echo_info "Android library created: ${LIB_DIR}/android/${abi}/libquiche_engine.so"
+    # Strip shared library (keep .dbg copy)
+    strip_shared_library "$so_dest"
+
+    echo_info "Android library created: $so_dest"
 
     # Show library info
     echo_info "Library size: $(du -h "${LIB_DIR}/android/${abi}/libquiche_engine.so" | cut -f1)"
@@ -497,32 +714,21 @@ CARGO_CONFIG
 
     # Also create a combined static library for static linking
     echo_info "Creating combined static library..."
-    LIBQUICHE_PATH="target/${target}/release/libquiche.a"
-    LIBEV_PATH="${OUT_DIR}/libev.a"
-    LIBENGINE_PATH="${OUT_DIR}/libquiche_engine.a"
-    LIBCRYPTO_PATH="${OUT_DIR}/build/libcrypto.a"
-    LIBSSL_PATH="${OUT_DIR}/build/libssl.a"
+    LIBQUICHE_PATH="${TARGET_DIR}/${target}/release/libquiche.a"
 
-    # Extract and combine all object files into one static library
-    TEMP_DIR=$(mktemp -d)
-    cd "$TEMP_DIR"
+    if [ ! -f "$LIBQUICHE_PATH" ]; then
+        echo_error "libquiche.a not found when creating static library"
+        return 1
+    fi
 
-    # Extract all .o files from all libraries
-    ${NDK_BIN}/llvm-ar -x "$LIBQUICHE_PATH"
-    ${NDK_BIN}/llvm-ar -x "$LIBEV_PATH"
-    ${NDK_BIN}/llvm-ar -x "$LIBENGINE_PATH"
-    ${NDK_BIN}/llvm-ar -x "$LIBCRYPTO_PATH"
-    ${NDK_BIN}/llvm-ar -x "$LIBSSL_PATH"
+    local static_dest="${LIB_DIR}/android/${abi}/libquiche_engine.a"
+    cp "$LIBQUICHE_PATH" "$static_dest"
 
-    # Create combined archive
-    ${NDK_BIN}/llvm-ar -rcs "${LIB_DIR}/android/${abi}/libquiche_engine.a" *.o
+    echo_info "Android static library created: $static_dest"
+    echo_info "Static library size: $(du -h "$static_dest" | cut -f1)"
 
-    # Cleanup
-    cd - > /dev/null
-    rm -rf "$TEMP_DIR"
-
-    echo_info "Android static library created: ${LIB_DIR}/android/${abi}/libquiche_engine.a"
-    echo_info "Static library size: $(du -h "${LIB_DIR}/android/${abi}/libquiche_engine.a" | cut -f1)"
+    # Write size report for this architecture
+    write_size_report "android" "$abi" "$so_dest" "$static_dest"
 
     # Copy header files (only once, shared by all platforms)
     if [ ! -d "${INCLUDE_DIR}" ]; then
