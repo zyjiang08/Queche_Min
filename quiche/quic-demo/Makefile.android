@@ -1,0 +1,107 @@
+# QUIC Demo - Android Cross-compilation Makefile
+# This file provides targets for building Android ARM64 executables
+
+# Android NDK Configuration
+NDK_ROOT = /Users/jiangzhongyang/Library/Android/sdk/ndk/23.2.8568313
+TOOLCHAIN = $(NDK_ROOT)/toolchains/llvm/prebuilt/darwin-x86_64
+SYSROOT = $(TOOLCHAIN)/sysroot
+
+# Android API Level 21 (Android 5.0+)
+API_LEVEL = 21
+TARGET = aarch64-linux-android$(API_LEVEL)
+
+# Compilers
+CC = $(TOOLCHAIN)/bin/$(TARGET)-clang
+CXX = $(TOOLCHAIN)/bin/$(TARGET)-clang++
+AR = $(TOOLCHAIN)/bin/llvm-ar
+STRIP = $(TOOLCHAIN)/bin/llvm-strip
+
+# Paths
+SRC_DIR = src
+BUILD_DIR = build/android
+LIB_DIR = ../../lib/android/arm64-v8a
+INCLUDE_DIR = ../../include
+
+# Compiler flags
+# -fPIE: Position Independent Executable (required for Android API 21+)
+# -Os: Optimize for size
+# -ffunction-sections -fdata-sections: Enable dead code elimination
+# -g: Include debug symbols for crash analysis
+CXXFLAGS = -Wall -Wextra -std=c++11 -O0 -g -fPIE \
+           -ffunction-sections -fdata-sections \
+           -I./include -I$(INCLUDE_DIR)
+
+# Linker flags
+# -pie: Create position independent executable
+# -Wl,--gc-sections: Remove unused sections
+# -Wl,-rpath,'$$ORIGIN': Set runtime library search path to current directory
+# -L$(LIB_DIR): Add library search path
+LDFLAGS = -pie \
+          -Wl,--gc-sections \
+          -Wl,-rpath,'$$ORIGIN' \
+          -L$(LIB_DIR) \
+          -static-libstdc++
+
+# Libraries
+# Link using -l flag (searches in -L path)
+LIBS = -lquiche_engine -llog -lm -ldl
+
+# Output
+CLIENT = quic-client-android
+CLIENT_STRIPPED = quic-client-android-stripped
+
+# Source files
+CLIENT_SRC = $(SRC_DIR)/client.cpp
+CLIENT_OBJ = $(BUILD_DIR)/client.o
+
+.PHONY: all clean strip
+
+all: $(BUILD_DIR) $(CLIENT)
+
+$(BUILD_DIR):
+	@mkdir -p $(BUILD_DIR)
+
+$(CLIENT_OBJ): $(CLIENT_SRC)
+	@echo "Compiling $< for Android ARM64..."
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(CLIENT): $(CLIENT_OBJ)
+	@echo "Linking $@ for Android ARM64..."
+	$(CXX) $(LDFLAGS) $^ $(LIBS) -o $@
+	@echo ""
+	@echo "✅ Built $@ successfully"
+	@ls -lh $@
+	@echo ""
+	@echo "⚠️  Note: This binary requires libquiche_engine.so to run"
+	@echo "   Library location: $(LIB_DIR)/libquiche_engine.so"
+	@echo ""
+	@echo "To create stripped version, run: make strip"
+
+strip: $(CLIENT)
+	@echo "Stripping debug symbols from $(CLIENT)..."
+	@cp $(CLIENT) $(CLIENT_STRIPPED)
+	$(STRIP) $(CLIENT_STRIPPED)
+	@echo ""
+	@echo "Size comparison:"
+	@ls -lh $(CLIENT) $(CLIENT_STRIPPED)
+	@echo ""
+	@echo "✅ Stripped binary: $(CLIENT_STRIPPED)"
+
+clean:
+	@rm -rf $(BUILD_DIR) $(CLIENT) $(CLIENT_STRIPPED)
+	@echo "Cleaned Android build artifacts"
+
+# Help target
+help:
+	@echo "Android quic-client build targets:"
+	@echo "  make all    - Build quic-client for Android ARM64"
+	@echo "  make strip  - Create stripped version (smaller size)"
+	@echo "  make clean  - Remove build artifacts"
+	@echo ""
+	@echo "Output:"
+	@echo "  $(CLIENT)           - Debug version with symbols"
+	@echo "  $(CLIENT_STRIPPED)  - Release version (stripped)"
+	@echo ""
+	@echo "Requirements:"
+	@echo "  - Android NDK 23.2.8568313"
+	@echo "  - libquiche_engine.so in $(LIB_DIR)"

@@ -83,7 +83,7 @@ build_ios() {
     rustup target add "$target" || true
 
     # Build quiche for iOS
-    cargo build --lib --release --target "$target" --features cpp-engine
+    cargo build --lib --release --target "$target" --features ffi,cpp-engine
 
     # Find the build output directory
     BUILD_DIR="target/${target}/release/build"
@@ -203,7 +203,7 @@ build_macos() {
     rustup target add "$target" || true
 
     # Build quiche for macOS with cpp-engine feature
-    cargo build --lib --release --target "$target" --features cpp-engine
+    cargo build --lib --release --target "$target" --features ffi,cpp-engine
 
     # Find the build output directory
     BUILD_DIR="target/${target}/release/build"
@@ -393,8 +393,21 @@ CARGO_CONFIG
     echo_info "Using CXX: ${NDK_BIN}/${toolchain}${ANDROID_API_LEVEL}-clang++"
     echo_info "Using AR: ${NDK_BIN}/llvm-ar"
 
-    # Build quiche for Android
-    cargo build --lib --release --target "$target" --features cpp-engine
+    # Step 1: Build libquiche.a (Rust QUIC library with FFI symbols)
+    echo_info "Building libquiche.a (Rust QUIC library with FFI)..."
+    cargo rustc -p quiche --release --target "$target" --no-default-features --features ffi,boringssl-vendored --crate-type staticlib --lib
+
+    # Verify libquiche.a was created
+    LIBQUICHE_PATH="target/${target}/release/libquiche.a"
+    if [ ! -f "$LIBQUICHE_PATH" ]; then
+        echo_error "Failed to generate libquiche.a at $LIBQUICHE_PATH"
+        return 1
+    fi
+    echo_info "✓ libquiche.a generated successfully: $(du -h "$LIBQUICHE_PATH" | cut -f1)"
+
+    # Step 2: Build C++ engine and link everything together
+    echo_info "Building C++ engine (will link with libquiche.a)..."
+    cargo build --lib --release --target "$target" --features ffi,cpp-engine
 
     # Find the build output directory
     BUILD_DIR="target/${target}/release/build"
@@ -475,6 +488,35 @@ CARGO_CONFIG
     if command -v readelf &> /dev/null; then
         readelf -d "${LIB_DIR}/android/${abi}/libquiche_engine.so" | grep NEEDED || true
     fi
+
+    # Also create a combined static library for static linking
+    echo_info "Creating combined static library..."
+    LIBQUICHE_PATH="target/${target}/release/libquiche.a"
+    LIBEV_PATH="${OUT_DIR}/libev.a"
+    LIBENGINE_PATH="${OUT_DIR}/libquiche_engine.a"
+    LIBCRYPTO_PATH="${OUT_DIR}/build/libcrypto.a"
+    LIBSSL_PATH="${OUT_DIR}/build/libssl.a"
+
+    # Extract and combine all object files into one static library
+    TEMP_DIR=$(mktemp -d)
+    cd "$TEMP_DIR"
+
+    # Extract all .o files from all libraries
+    ${NDK_BIN}/llvm-ar -x "$LIBQUICHE_PATH"
+    ${NDK_BIN}/llvm-ar -x "$LIBEV_PATH"
+    ${NDK_BIN}/llvm-ar -x "$LIBENGINE_PATH"
+    ${NDK_BIN}/llvm-ar -x "$LIBCRYPTO_PATH"
+    ${NDK_BIN}/llvm-ar -x "$LIBSSL_PATH"
+
+    # Create combined archive
+    ${NDK_BIN}/llvm-ar -rcs "${LIB_DIR}/android/${abi}/libquiche_engine.a" *.o
+
+    # Cleanup
+    cd - > /dev/null
+    rm -rf "$TEMP_DIR"
+
+    echo_info "Android static library created: ${LIB_DIR}/android/${abi}/libquiche_engine.a"
+    echo_info "Static library size: $(du -h "${LIB_DIR}/android/${abi}/libquiche_engine.a" | cut -f1)"
 
     # Copy header files (only once, shared by all platforms)
     if [ ! -d "${INCLUDE_DIR}" ]; then

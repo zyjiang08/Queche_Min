@@ -1,13 +1,18 @@
 // client.cpp
 // QUIC Client Demo - Bidirectional Data Transfer Test with Polling
+// Cross-platform version using printf for maximum compatibility
+//
+// Note: Uses printf instead of std::cout to avoid Android bionic libc locale issues
+// while maintaining full compatibility with all platforms (macOS, Linux, Android).
 //
 // Copyright (C) 2025, Cloudflare, Inc.
 // All rights reserved.
 
 #include <quiche_engine.h>
 
-#include <iostream>
+#include <cstdio>      // printf instead of cout
 #include <string>
+#include <vector>
 #include <cstring>
 #include <thread>
 #include <chrono>
@@ -33,7 +38,8 @@ static void dataReceivingThread() {
         return;
     }
 
-    std::cout << "✓ Starting data reception polling thread..." << std::endl;
+    printf("✓ Starting data reception polling thread...\n");
+    fflush(stdout);
 
     uint8_t buf[65536];  // 64KB buffer
     bool fin = false;
@@ -50,19 +56,22 @@ static void dataReceivingThread() {
         if (len > 0) {
             // Data received
             total_received.fetch_add(len);
-            std::cout << "✓ Received " << len << " bytes from server "
-                     << "(total received: " << total_received.load() << " bytes)" << std::endl;
+            printf("✓ Received %zd bytes from server (total received: %lu bytes)\n",
+                   len, (unsigned long)total_received.load());
+            fflush(stdout);
         } else if (len == 0) {
             // No data available, continue polling
         } else {
             // Error occurred
-            std::cerr << "✗ Read error on stream 4" << std::endl;
+            fprintf(stderr, "✗ Read error on stream 4\n");
+            fflush(stderr);
             break;
         }
 
         if (fin) {
-            std::cout << "✓ Server stream finished. Total received: "
-                     << total_received.load() << " bytes" << std::endl;
+            printf("✓ Server stream finished. Total received: %lu bytes\n",
+                   (unsigned long)total_received.load());
+            fflush(stdout);
             break;
         }
 
@@ -82,7 +91,8 @@ static void dataSendingThread() {
         return;
     }
 
-    std::cout << "✓ Starting data transmission (200KB per second for 5 seconds)..." << std::endl;
+    printf("✓ Starting data transmission (200KB per second for 5 seconds)...\n");
+    fflush(stdout);
 
     // Prepare 200KB data buffer
     const size_t CHUNK_SIZE = 200 * 1024;  // 200KB per second
@@ -114,7 +124,8 @@ static void dataSendingThread() {
                     sent_this_round += written;
                     total_sent += written;
                 } else if (written < 0) {
-                    std::cerr << "✗ Failed to send chunk at offset " << offset << std::endl;
+                    fprintf(stderr, "✗ Failed to send chunk at offset %zu\n", offset);
+                    fflush(stderr);
                     break;
                 }
 
@@ -123,8 +134,9 @@ static void dataSendingThread() {
             }
 
             count++;
-            std::cout << "✓ Sent " << sent_this_round << " bytes in round " << count
-                     << " (total sent: " << total_sent << " bytes)" << std::endl;
+            printf("✓ Sent %zu bytes in round %d (total sent: %lu bytes)\n",
+                   sent_this_round, count, (unsigned long)total_sent);
+            fflush(stdout);
         }
 
         // Wait for 1 second
@@ -137,19 +149,22 @@ static void dataSendingThread() {
         }
     }
 
-    std::cout << "✓ Data transmission completed. Total sent: " << total_sent << " bytes" << std::endl;
+    printf("✓ Data transmission completed. Total sent: %lu bytes\n", (unsigned long)total_sent);
+    fflush(stdout);
 
     // Close the stream with FIN
     if (global_engine) {
         global_engine->write(nullptr, 0, true);  // Send FIN
     }
 
-    std::cout << "\n⏱ Waiting 8 seconds for server to complete sending remaining data..." << std::endl;
+    printf("\n⏱ Waiting 8 seconds for server to complete sending remaining data...\n");
+    fflush(stdout);
 
     // Wait longer for server to complete sending (8 seconds instead of 2)
     for (int i = 0; i < 8 && !should_stop.load(); i++) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
-        std::cout << "  " << (i + 1) << "/8 seconds..." << std::endl;
+        printf("  %d/8 seconds...\n", i + 1);
+        fflush(stdout);
     }
 
     should_stop.store(true);
@@ -167,33 +182,38 @@ static void onEngineEvent(
     switch (event) {
         case EngineEvent::CONNECTED: {
             if (event_data.type == EventDataType::STRING) {
-                std::cout << "✓ Connection established: " << event_data.str_val << std::endl;
+                printf("✓ Connection established: %s\n", event_data.str_val.c_str());
+                fflush(stdout);
 
                 // Signal that connection is ready
                 connection_ready.store(true);
             } else {
-                std::cerr << "✗ Invalid event data for CONNECTED event" << std::endl;
+                fprintf(stderr, "✗ Invalid event data for CONNECTED event\n");
+                fflush(stderr);
             }
             break;
         }
 
         case EngineEvent::CONNECTION_CLOSED: {
-            std::cout << "✓ Connection closed" << std::endl;
+            printf("✓ Connection closed\n");
+            fflush(stdout);
 
             // Print statistics
             if (engine) {
                 EngineStats stats = engine->getStats();
-                std::cout << "\n=== Connection Statistics ===" << std::endl;
-                std::cout << "  Packets sent:     " << stats.packets_sent << std::endl;
-                std::cout << "  Packets received: " << stats.packets_received << std::endl;
-                std::cout << "  Bytes sent:       " << stats.bytes_sent << std::endl;
-                std::cout << "  Bytes received:   " << stats.bytes_received << std::endl;
-                std::cout << "  Packets lost:     " << stats.packets_lost << std::endl;
-                std::cout << "  RTT:              " << stats.rtt_ns << " ns ("
-                         << (stats.rtt_ns / 1000000.0) << " ms)" << std::endl;
-                std::cout << "  CWND:             " << stats.cwnd << " bytes" << std::endl;
-                std::cout << "\n=== Application Data ===" << std::endl;
-                std::cout << "  Total received from server: " << total_received.load() << " bytes" << std::endl;
+                printf("\n=== Connection Statistics ===\n");
+                printf("  Packets sent:     %zu\n", stats.packets_sent);
+                printf("  Packets received: %zu\n", stats.packets_received);
+                printf("  Bytes sent:       %zu\n", stats.bytes_sent);
+                printf("  Bytes received:   %zu\n", stats.bytes_received);
+                printf("  Packets lost:     %zu\n", stats.packets_lost);
+                printf("  RTT:              %lu ns (%.2f ms)\n",
+                       (unsigned long)stats.rtt_ns, stats.rtt_ns / 1000000.0);
+                printf("  CWND:             %lu bytes\n", (unsigned long)stats.cwnd);
+                printf("\n=== Application Data ===\n");
+                printf("  Total received from server: %lu bytes\n",
+                       (unsigned long)total_received.load());
+                fflush(stdout);
             }
 
             should_stop.store(true);
@@ -202,7 +222,8 @@ static void onEngineEvent(
 
         case EngineEvent::ERROR: {
             if (engine) {
-                std::cerr << "✗ Engine error: " << engine->getLastError() << std::endl;
+                fprintf(stderr, "✗ Engine error: %s\n", engine->getLastError().c_str());
+                fflush(stderr);
             }
             should_stop.store(true);
             break;
@@ -217,21 +238,23 @@ static void onEngineEvent(
 int main(int argc, char* argv[]) {
     // Check arguments
     if (argc < 3) {
-        std::cerr << "Usage: " << argv[0] << " <host> <port>" << std::endl;
-        std::cerr << "\nExample:" << std::endl;
-        std::cerr << "  " << argv[0] << " 127.0.0.1 4433" << std::endl;
+        fprintf(stderr, "Usage: %s <host> <port>\n", argv[0]);
+        fprintf(stderr, "\nExample:\n");
+        fprintf(stderr, "  %s 127.0.0.1 4433\n", argv[0]);
+        fflush(stderr);
         return 1;
     }
 
     const std::string host = argv[1];
     const std::string port = argv[2];
 
-    std::cout << "QUIC Client Demo - Bidirectional Data Transfer (Polling Mode)" << std::endl;
-    std::cout << "=============================================================" << std::endl;
-    std::cout << "Upload:   200KB/sec for 5 seconds" << std::endl;
-    std::cout << "Download: Polling for data from server" << std::endl;
-    std::cout << "-------------------------------------------------------------" << std::endl;
-    std::cout << "Connecting to " << host << ":" << port << "..." << std::endl << std::endl;
+    printf("QUIC Client Demo - Bidirectional Data Transfer (Polling Mode)\n");
+    printf("=============================================================\n");
+    printf("Upload:   200KB/sec for 5 seconds\n");
+    printf("Download: Polling for data from server\n");
+    printf("-------------------------------------------------------------\n");
+    printf("Connecting to %s:%s...\n\n", host.c_str(), port.c_str());
+    fflush(stdout);
 
     // Prepare configuration using map with enum keys
     ConfigMap config;
@@ -255,14 +278,17 @@ int main(int argc, char* argv[]) {
 
         // Set event callback
         if (!engine.setEventCallback(onEngineEvent, nullptr)) {
-            std::cerr << "✗ Failed to set event callback" << std::endl;
+            fprintf(stderr, "✗ Failed to set event callback\n");
+            fflush(stderr);
             return 1;
         }
 
         // Start the engine (non-blocking, runs in background thread)
-        std::cout << "Starting event loop..." << std::endl << std::endl;
+        printf("Starting event loop...\n\n");
+        fflush(stdout);
         if (!engine.start()) {
-            std::cerr << "\n✗ Engine error: " << engine.getLastError() << std::endl;
+            fprintf(stderr, "\n✗ Engine error: %s\n", engine.getLastError().c_str());
+            fflush(stderr);
             return 1;
         }
 
@@ -279,7 +305,8 @@ int main(int argc, char* argv[]) {
 
             auto elapsed = std::chrono::steady_clock::now() - start_time;
             if (std::chrono::duration_cast<std::chrono::seconds>(elapsed).count() > 15) {
-                std::cout << "\n⚠ Timeout reached, closing connection..." << std::endl;
+                printf("\n⚠ Timeout reached, closing connection...\n");
+                fflush(stdout);
                 should_stop.store(true);
                 break;
             }
@@ -294,36 +321,44 @@ int main(int argc, char* argv[]) {
         }
 
         // Print final statistics
-        std::cout << "\n" << std::string(60, '=') << std::endl;
-        std::cout << "Final Statistics" << std::endl;
-        std::cout << std::string(60, '=') << std::endl;
-        std::cout << "Total received from server: " << total_received.load() << " bytes" << std::endl;
+        printf("\n");
+        for (int i = 0; i < 60; i++) printf("=");
+        printf("\n");
+        printf("Final Statistics\n");
+        for (int i = 0; i < 60; i++) printf("=");
+        printf("\n");
+        printf("Total received from server: %lu bytes\n", (unsigned long)total_received.load());
 
         // Get engine statistics
         EngineStats stats = engine.getStats();
-        std::cout << "\nConnection Statistics:" << std::endl;
-        std::cout << "  Packets sent:     " << stats.packets_sent << std::endl;
-        std::cout << "  Packets received: " << stats.packets_received << std::endl;
-        std::cout << "  Packets lost:     " << stats.packets_lost << std::endl;
-        std::cout << "  Bytes sent:       " << stats.bytes_sent << std::endl;
-        std::cout << "  Bytes received:   " << stats.bytes_received << std::endl;
-        std::cout << "  RTT:              " << (stats.rtt_ns / 1000000.0) << " ms" << std::endl;
-        std::cout << "  CWND:             " << stats.cwnd << " bytes" << std::endl;
-        std::cout << std::string(60, '=') << std::endl;
+        printf("\nConnection Statistics:\n");
+        printf("  Packets sent:     %zu\n", stats.packets_sent);
+        printf("  Packets received: %zu\n", stats.packets_received);
+        printf("  Packets lost:     %zu\n", stats.packets_lost);
+        printf("  Bytes sent:       %zu\n", stats.bytes_sent);
+        printf("  Bytes received:   %zu\n", stats.bytes_received);
+        printf("  RTT:              %.2f ms\n", stats.rtt_ns / 1000000.0);
+        printf("  CWND:             %lu bytes\n", (unsigned long)stats.cwnd);
+        for (int i = 0; i < 60; i++) printf("=");
+        printf("\n");
+        fflush(stdout);
 
         // Shutdown the engine (blocking, waits for graceful shutdown)
         engine.shutdown(0, "Test completed");
 
         // Clean up (automatic with destructor)
-        std::cout << "\nCleaning up..." << std::endl;
+        printf("\nCleaning up...\n");
+        fflush(stdout);
 
         global_engine = nullptr;
 
     } catch (const std::exception& e) {
-        std::cerr << "✗ Exception: " << e.what() << std::endl;
+        fprintf(stderr, "✗ Exception: %s\n", e.what());
+        fflush(stderr);
         return 1;
     }
 
-    std::cout << "✓ Done" << std::endl;
+    printf("✓ Done\n");
+    fflush(stdout);
     return 0;
 }

@@ -88,7 +88,7 @@ intrusive-collections = "0.9.5"
 libc = { workspace = true }
 libm = "0.2"
 log = { workspace = true, features = ["std"] }
-octets = { workspace = true, features = ["huffman_hpack"] }
+octets = { workspace = true }
 qlog = { workspace = true, optional = true }
 sfv = { version = "0.9", optional = true }
 slab = "0.4"
@@ -108,4 +108,6 @@ rstest = { workspace = true }
 url = { workspace = true }
 
 [lib]
-crate-type = ["lib", "staticlib", "cdylib"]
+crate-type = ["lib", "staticlib"]
+# 注意：禁用cdylib以避免Android链接时的符号解析问题
+# cdylib会导致链接器期待libquiche.so而不是链接libquiche.a中的符号

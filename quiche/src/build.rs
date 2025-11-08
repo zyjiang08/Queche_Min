@@ -114,6 +114,8 @@ fn get_boringssl_cmake_config() -> cmake::Config {
     // 禁用弱加密算法
     boringssl_cmake.define("OPENSSL_NO_DES", "1");
     boringssl_cmake.define("OPENSSL_NO_RC4", "1");
+    boringssl_cmake.define("OPENSSL_NO_RC2", "1");            // RC2
+    boringssl_cmake.define("OPENSSL_NO_MD4", "1");
     boringssl_cmake.define("OPENSSL_NO_MD5", "1");
     boringssl_cmake.define("OPENSSL_NO_DSA", "1");
     boringssl_cmake.define("OPENSSL_NO_DH", "1");
@@ -126,6 +128,14 @@ fn get_boringssl_cmake_config() -> cmake::Config {
     boringssl_cmake.define("OPENSSL_NO_SM2", "1");
     boringssl_cmake.define("OPENSSL_NO_SM3", "1");
     boringssl_cmake.define("OPENSSL_NO_SM4", "1");
+
+    // 禁用不需要的功能（进一步裁剪）
+    boringssl_cmake.define("OPENSSL_NO_OCSP", "1");           // OCSP协议
+    boringssl_cmake.define("OPENSSL_NO_CT", "1");             // Certificate Transparency
+    boringssl_cmake.define("OPENSSL_NO_SCT", "1");            // Signed Certificate Timestamp
+    boringssl_cmake.define("OPENSSL_NO_SCRYPT", "1");         // scrypt密钥派生
+    boringssl_cmake.define("OPENSSL_NO_BLAKE2", "1");         // BLAKE2哈希
+    boringssl_cmake.define("OPENSSL_NO_DEPRECATED", "1");     // 废弃API
 
     // 体积优化
     boringssl_cmake.define("CMAKE_BUILD_TYPE", "MinSizeRel");
@@ -533,22 +543,47 @@ fn build_cpp_engine() {
             let libcrypto_path = out_path.join("build/libcrypto.a");
             let libssl_path = out_path.join("build/libssl.a");
 
+            // Get libquiche.a (Rust QUIC library with FFI symbols)
+            let libquiche_path = out_path
+                .parent().unwrap()
+                .parent().unwrap()
+                .parent().unwrap()
+                .join("libquiche.a");
+
             // Build shared library command
             let so_output = out_path.join("libquiche_engine.so");
-            println!("cargo:warning=Linking BoringSSL libraries:");
-            println!("cargo:warning=  libcrypto.a: {:?}", libcrypto_path);
-            println!("cargo:warning=  libssl.a: {:?}", libssl_path);
 
-            let link_result = std::process::Command::new(&toolchain_bin)
-                .arg("-shared")
+            // If libquiche.a exists, it includes BoringSSL, so don't link separately
+            let use_libquiche = libquiche_path.exists();
+
+            if use_libquiche {
+                println!("cargo:warning=Linking libraries (libquiche.a includes BoringSSL):");
+                println!("cargo:warning=  libquiche.a: {:?}", libquiche_path);
+            } else {
+                println!("cargo:warning=Linking libraries (separate BoringSSL):");
+                println!("cargo:warning=  libcrypto.a: {:?}", libcrypto_path);
+                println!("cargo:warning=  libssl.a: {:?}", libssl_path);
+            }
+
+            let mut link_cmd = std::process::Command::new(&toolchain_bin);
+            link_cmd.arg("-shared")
                 .arg("-o")
                 .arg(&so_output)
-                .arg("-Wl,--whole-archive")
-                .arg(&libengine_path)
-                .arg(&libev_path)
-                .arg(&libcrypto_path)
-                .arg(&libssl_path)
-                .arg("-Wl,--no-whole-archive")
+                .arg("-Wl,--whole-archive");
+
+            if use_libquiche {
+                link_cmd.arg(&libquiche_path);
+            }
+
+            link_cmd.arg(&libengine_path)
+                .arg(&libev_path);
+
+            if !use_libquiche {
+                link_cmd.arg(&libcrypto_path)
+                    .arg(&libssl_path);
+            }
+
+            let link_result = link_cmd.arg("-Wl,--no-whole-archive")
                 .arg("-lc++_shared")
                 .arg("-llog")
                 .arg("-lm")
