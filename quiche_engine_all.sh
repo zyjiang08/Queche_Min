@@ -82,8 +82,10 @@ build_ios() {
     # Add iOS target if not already installed
     rustup target add "$target" || true
 
-    # Build quiche for iOS
-    cargo build --lib --release --target "$target" --features ffi,cpp-engine
+    # Build quiche for iOS (disable HTTP/3 for size optimization: 30-40% smaller)
+    cargo build --lib --release --target "$target" \
+        --no-default-features \
+        --features boringssl-vendored,ffi,cpp-engine
 
     # Find the build output directory
     BUILD_DIR="target/${target}/release/build"
@@ -202,8 +204,10 @@ build_macos() {
     # Add macOS target if not already installed
     rustup target add "$target" || true
 
-    # Build quiche for macOS with cpp-engine feature
-    cargo build --lib --release --target "$target" --features ffi,cpp-engine
+    # Build quiche for macOS (disable HTTP/3 for size optimization: 30-40% smaller)
+    cargo build --lib --release --target "$target" \
+        --no-default-features \
+        --features boringssl-vendored,ffi,cpp-engine
 
     # Find the build output directory
     BUILD_DIR="target/${target}/release/build"
@@ -405,9 +409,11 @@ CARGO_CONFIG
     fi
     echo_info "✓ libquiche.a generated successfully: $(du -h "$LIBQUICHE_PATH" | cut -f1)"
 
-    # Step 2: Build C++ engine and link everything together
+    # Step 2: Build C++ engine and link everything together (disable HTTP/3 for size: 30-40% smaller)
     echo_info "Building C++ engine (will link with libquiche.a)..."
-    cargo build --lib --release --target "$target" --features ffi,cpp-engine
+    cargo build --lib --release --target "$target" \
+        --no-default-features \
+        --features boringssl-vendored,ffi,cpp-engine
 
     # Find the build output directory
     BUILD_DIR="target/${target}/release/build"
