@@ -4,23 +4,34 @@
 
 CC = gcc
 CXX = g++
-CFLAGS = -Wall -Wextra -O2 -g
-CXXFLAGS = -Wall -Wextra -O2 -g -std=c++11
 
 # Detect platform and architecture
 UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
 
+# ============ 体积优化配置 ============
 # Determine platform-specific settings
 ifeq ($(UNAME_S),Darwin)
     PLATFORM = macos
     FRAMEWORK_FLAGS = -framework Security -framework Foundation
+    # macOS: 不使用LTO以避免跨语言链接兼容性问题
+    OPT_FLAGS = -ffunction-sections -fdata-sections
+    # macOS链接器：使用dead_strip移除未使用代码
+    LINKER_OPT_FLAGS = -Wl,-dead_strip
 else ifeq ($(UNAME_S),Linux)
     PLATFORM = linux
     FRAMEWORK_FLAGS =
+    # Linux: 不使用LTO以避免跨语言链接兼容性问题
+    OPT_FLAGS = -ffunction-sections -fdata-sections
+    # Linux链接器：使用gc-sections移除未使用代码
+    LINKER_OPT_FLAGS = -Wl,--gc-sections
 else
     $(error Unsupported platform: $(UNAME_S))
 endif
+
+# Compiler flags with optimization
+CFLAGS = -Wall -Wextra -Os -g $(OPT_FLAGS)
+CXXFLAGS = -Wall -Wextra -Os -g -std=c++11 $(OPT_FLAGS)
 
 # Determine architecture
 ifeq ($(UNAME_M),x86_64)
@@ -42,7 +53,7 @@ BUILD_SCRIPT = ../../quiche_engine_all.sh
 
 # Compiler flags
 INCLUDES = -I./include -I$(INCLUDE_ROOT) -I/usr/local/include
-LDFLAGS = -L./lib -L/usr/local/lib $(FRAMEWORK_FLAGS)
+LDFLAGS = -L./lib -L/usr/local/lib $(FRAMEWORK_FLAGS) $(LINKER_OPT_FLAGS)
 # Note: libquiche_engine.a contains libquiche.a + libev.a + BoringSSL
 LIBS = $(QUICHE_ENGINE_LIB) -L./lib -lquiche -lpthread -ldl -lm
 

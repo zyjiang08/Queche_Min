@@ -74,6 +74,69 @@ fn get_boringssl_cmake_config() -> cmake::Config {
 
     let mut boringssl_cmake = cmake::Config::new("deps/boringssl");
 
+    // ============ 符号可见性 & 死代码消除 & 体积优化 ============
+    // 注意: 对于跨语言链接，我们不在C/C++层使用LTO，只在Rust层使用
+    // 这样可以避免LLVM bitcode格式导致的链接问题
+
+    // 默认隐藏所有符号，只有标记为QUICHE_EXPORT的才暴露
+    boringssl_cmake.cflag("-fvisibility=hidden");
+    boringssl_cmake.cxxflag("-fvisibility=hidden");
+
+    // 死代码消除：将每个函数和数据放入独立的section
+    boringssl_cmake.cflag("-ffunction-sections");
+    boringssl_cmake.cflag("-fdata-sections");
+    boringssl_cmake.cxxflag("-ffunction-sections");
+    boringssl_cmake.cxxflag("-fdata-sections");
+
+    // 体积优化：使用-Os而不是-O2
+    boringssl_cmake.cflag("-Os");
+    boringssl_cmake.cxxflag("-Os");
+
+    // ============ BoringSSL深度裁剪 ============
+    // 禁用不需要的协议
+    boringssl_cmake.define("OPENSSL_NO_SSL3", "1");
+    boringssl_cmake.define("OPENSSL_NO_TLS1", "1");
+    boringssl_cmake.define("OPENSSL_NO_TLS1_1", "1");
+    boringssl_cmake.define("OPENSSL_NO_TLS1_2_METHOD", "1"); // ⚠️ 注意是 _METHOD
+    boringssl_cmake.define("OPENSSL_NO_DTLS", "1");           // ⚠️ QUIC不使用DTLS
+
+    // 禁用不需要的扩展
+    boringssl_cmake.define("OPENSSL_NO_ENGINE", "1");
+    boringssl_cmake.define("OPENSSL_NO_HEARTBEATS", "1");
+    boringssl_cmake.define("OPENSSL_NO_SRP", "1");
+    boringssl_cmake.define("OPENSSL_NO_NEXTPROTONEG", "1");
+    boringssl_cmake.define("OPENSSL_NO_SRTP", "1");
+    boringssl_cmake.define("OPENSSL_NO_STATIC_ENGINE", "1");
+    boringssl_cmake.define("OPENSSL_NO_DYNAMIC_ENGINE", "1");
+    boringssl_cmake.define("OPENSSL_NO_PSK", "1");
+    boringssl_cmake.define("OPENSSL_NO_COMP", "1");           // 禁用压缩
+
+    // 禁用弱加密算法
+    boringssl_cmake.define("OPENSSL_NO_DES", "1");
+    boringssl_cmake.define("OPENSSL_NO_RC4", "1");
+    boringssl_cmake.define("OPENSSL_NO_MD5", "1");
+    boringssl_cmake.define("OPENSSL_NO_DSA", "1");
+    boringssl_cmake.define("OPENSSL_NO_DH", "1");
+    boringssl_cmake.define("OPENSSL_NO_BF", "1");             // Blowfish
+    boringssl_cmake.define("OPENSSL_NO_CAST", "1");
+    boringssl_cmake.define("OPENSSL_NO_IDEA", "1");
+    boringssl_cmake.define("OPENSSL_NO_CAMELLIA", "1");
+    boringssl_cmake.define("OPENSSL_NO_SEED", "1");
+    boringssl_cmake.define("OPENSSL_NO_GOST", "1");
+    boringssl_cmake.define("OPENSSL_NO_SM2", "1");
+    boringssl_cmake.define("OPENSSL_NO_SM3", "1");
+    boringssl_cmake.define("OPENSSL_NO_SM4", "1");
+
+    // 体积优化
+    boringssl_cmake.define("CMAKE_BUILD_TYPE", "MinSizeRel");
+
+    // ⚠️ 仅在最终发布时启用（调试时不要启用，否则无法排查问题）
+    // 通过环境变量 QUICHE_MINIMAL_BSSL=1 启用
+    if std::env::var("QUICHE_MINIMAL_BSSL").is_ok() {
+        boringssl_cmake.define("OPENSSL_NO_ERR", "1");        // 移除错误字符串
+        boringssl_cmake.define("OPENSSL_NO_STDIO", "1");      // 移除文件I/O
+    }
+
     // Add platform-specific parameters.
     match os.as_ref() {
         "android" => {

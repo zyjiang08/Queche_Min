@@ -72,5 +72,12 @@ url = { version = "2" }
 [profile.bench]
 debug = true
 
+# ============ 体积优化配置 ============
 [profile.release]
-debug = true
+# LTO在跨语言链接时会导致兼容性问题，暂时禁用
+# lto = "thin"
+codegen-units = 1        # 单个codegen单元以最大化优化
+opt-level = "z"          # 优化体积
+strip = false            # 不strip静态库，在最终二进制上strip
+panic = "abort"          # 减少panic展开代码
+debug = false            # 不包含调试信息
