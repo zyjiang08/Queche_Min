@@ -108,11 +108,31 @@ using EventCallback = std::function<void(
 class QuicheEngine {
 public:
     /**
-     * Create a new QUIC engine
+     * Default constructor - creates empty engine object
+     * Does not allocate resources or establish connection
+     */
+    QuicheEngine();
+
+    /**
+     * Destructor - automatically closes connection and frees resources
+     */
+    ~QuicheEngine();
+
+    // Disable copy
+    QuicheEngine(const QuicheEngine&) = delete;
+    QuicheEngine& operator=(const QuicheEngine&) = delete;
+
+    // Enable move
+    QuicheEngine(QuicheEngine&& other) noexcept;
+    QuicheEngine& operator=(QuicheEngine&& other) noexcept;
+
+    /**
+     * Open engine with QUIC configuration
+     * Can be called before or after setEventCallback()
+     * Must be called before connect()
      *
-     * @param host Remote hostname or IP address
-     * @param port Remote port number
-     * @param config Configuration parameters (optional)
+     * @param config QUIC configuration parameters
+     * @return true on success, false on failure
      *
      * Configuration keys (ConfigKey enum):
      *   - MAX_IDLE_TIMEOUT (uint64_t): Idle timeout in milliseconds (default: 5000)
@@ -126,34 +146,55 @@ public:
      *   - DISABLE_ACTIVE_MIGRATION (bool): Disable migration (default: true)
      *   - ENABLE_DEBUG_LOG (bool): Enable debug logging (default: false)
      */
-    QuicheEngine(const std::string& host, const std::string& port,
-                 const ConfigMap& config = ConfigMap());
-
-    /**
-     * Destructor - automatically stops and cleans up resources
-     */
-    ~QuicheEngine();
-
-    // Disable copy
-    QuicheEngine(const QuicheEngine&) = delete;
-    QuicheEngine& operator=(const QuicheEngine&) = delete;
-
-    // Enable move
-    QuicheEngine(QuicheEngine&& other) noexcept;
-    QuicheEngine& operator=(QuicheEngine&& other) noexcept;
+    bool open(const ConfigMap& config);
 
     /**
      * Set event callback handler
+     * Can be called before or after open()
+     * Must be called before connect()
      *
-     * @param callback Callback function
-     * @param user_data User data passed to callback (optional)
+     * @param callback Event callback function
+     * @param user_data User data pointer (optional)
      * @return true on success, false on failure
      */
     bool setEventCallback(EventCallback callback, void* user_data = nullptr);
 
     /**
+     * Synchronously connect to server (blocks until connected or timeout)
+     *
+     * Prerequisites:
+     * - Must call open() first to set configuration
+     * - Must call setEventCallback() first to set callback
+     *
+     * @param host Server hostname or IP address
+     * @param port Server port number
+     * @param timeout_ms Timeout in milliseconds (0 = use default 5000ms)
+     * @return Connection ID (8-char hex string) on success, empty string on failure
+     *
+     * Error handling:
+     * - Returns empty if open() not called
+     * - Returns empty if setEventCallback() not called
+     * - Returns empty on timeout, getLastError() provides details
+     * - Returns existing CID if already connected
+     */
+    std::string connect(const std::string& host, const std::string& port,
+                       uint64_t timeout_ms = 5000);
+
+    /**
+     * Close connection gracefully (blocking)
+     * Sends CONNECTION_CLOSE frame and waits for shutdown
+     *
+     * @param app_error Application error code (default: 0)
+     * @param reason Reason string for close (default: empty)
+     *
+     * Note: Configuration and callback are preserved after close(),
+     *       allowing reconnection with connect()
+     */
+    void close(uint64_t app_error = 0, const std::string& reason = "");
+
+    /**
      * Write data to stream (thread-safe)
-     * Uses internal default stream ID
+     * Uses internal default stream ID (4)
      *
      * @param data Data buffer
      * @param len Data length
@@ -162,11 +203,9 @@ public:
      */
     ssize_t write(const uint8_t* data, size_t len, bool fin);
 
-
     /**
-     * Read data from stream
-     * Can be called from any thread (thread-safe)
-     * Uses internal default stream ID
+     * Read data from stream (thread-safe)
+     * Uses internal default stream ID (4)
      *
      * @param buf Buffer to read into
      * @param buf_len Buffer length
@@ -174,23 +213,6 @@ public:
      * @return Number of bytes read, 0 if no data available, -1 on fatal error
      */
     ssize_t read(uint8_t* buf, size_t buf_len, bool& fin);
-
-    /**
-     * Start the engine - begins connection and event loop (non-blocking)
-     * Returns immediately after starting background thread
-     *
-     * @return true on success, false on failure
-     */
-    bool start();
-
-    /**
-     * Shutdown the engine - closes connection and stops event loop (blocking)
-     * Waits for graceful shutdown to complete
-     *
-     * @param app_error Application error code (default: 0)
-     * @param reason Reason string for close (default: empty)
-     */
-    void shutdown(uint64_t app_error = 0, const std::string& reason = "");
 
     /**
      * Check if connection is established

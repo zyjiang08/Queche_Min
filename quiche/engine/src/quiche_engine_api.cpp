@@ -13,8 +13,8 @@ namespace quiche {
 // QuicheEngine Constructor/Destructor
 // ============================================================================
 
-QuicheEngine::QuicheEngine(const std::string& host, const std::string& port, const ConfigMap& config)
-    : mPImpl(new QuicheEngineImpl(host, port, config))
+QuicheEngine::QuicheEngine()
+    : mPImpl(new QuicheEngineImpl())
 {
     mPImpl->setWrapper(this);
 }
@@ -46,8 +46,21 @@ QuicheEngine& QuicheEngine::operator=(QuicheEngine&& other) noexcept {
 // Engine Public API - Delegates to Impl
 // ============================================================================
 
+bool QuicheEngine::open(const ConfigMap& config) {
+    return mPImpl->open(config);
+}
+
 bool QuicheEngine::setEventCallback(EventCallback callback, void* user_data) {
     return mPImpl->setEventCallback(callback, user_data);
+}
+
+std::string QuicheEngine::connect(const std::string& host, const std::string& port,
+                                 uint64_t timeout_ms) {
+    return mPImpl->connect(host, port, timeout_ms);
+}
+
+void QuicheEngine::close(uint64_t app_error, const std::string& reason) {
+    mPImpl->close(app_error, reason);
 }
 
 ssize_t QuicheEngine::write(const uint8_t* data, size_t len, bool fin) {
@@ -56,14 +69,6 @@ ssize_t QuicheEngine::write(const uint8_t* data, size_t len, bool fin) {
 
 ssize_t QuicheEngine::read(uint8_t* buf, size_t buf_len, bool& fin) {
     return mPImpl->read(buf, buf_len, fin);
-}
-
-bool QuicheEngine::start() {
-    return mPImpl->start();
-}
-
-void QuicheEngine::shutdown(uint64_t app_error, const std::string& reason) {
-    mPImpl->shutdown(app_error, reason);
 }
 
 bool QuicheEngine::isConnected() const {

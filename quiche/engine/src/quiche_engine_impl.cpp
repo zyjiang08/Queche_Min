@@ -80,13 +80,15 @@ void QuicheEngineImpl::debugLog(const char* line, void* argp) {
 // Engine::Impl Constructor/Destructor
 // ============================================================================
 
-QuicheEngineImpl::QuicheEngineImpl(const std::string& h, const std::string& p, const ConfigMap& cfg)
-    : mHost(h), mPort(p), mConfig(cfg),
-      mQuicheCfg(nullptr), mConn(nullptr),
+QuicheEngineImpl::QuicheEngineImpl()
+    : mQuicheCfg(nullptr), mConn(nullptr),
       mSock(-1), mLocalAddrLen(0), mPeerAddrLen(0),
       mLoop(nullptr), mThreadStarted(false),
       mEventCallback(nullptr), mUserData(nullptr), mWrapper(nullptr),
-      mIsRunning(false), mIsConnected(false)
+      mIsOpened(false), mHasCallback(false),
+      mIsConnected(false), mIsRunning(false),
+      mStreamId(4),
+      mConnectComplete(false), mConnectSuccess(false)
 #if defined(__linux__)
       , mSendBufs(nullptr), mRecvBufs(nullptr), mSendMsgs(nullptr), mRecvMsgs(nullptr),
       mSendIovs(nullptr), mRecvIovs(nullptr), mSendInfos(nullptr), mRecvAddrs(nullptr)
@@ -205,6 +207,7 @@ QuicheEngineImpl::~QuicheEngineImpl() {
 bool QuicheEngineImpl::setEventCallback(EventCallback callback, void* ud) {
     mEventCallback = callback;
     mUserData = ud;
+    mHasCallback = true;
     return true;
 }
 
@@ -301,7 +304,7 @@ bool QuicheEngineImpl::setupConnection() {
 
     // Generate mConnection ID
     uint8_t scid[LOCAL_CONN_ID_LEN];
-    int rng = open("/dev/urandom", O_RDONLY);
+    int rng = ::open("/dev/urandom", O_RDONLY);
     if (rng < 0) {
         mLastError = "Failed to open /dev/urandom";
         quiche_config_free(mQuicheCfg);
@@ -471,10 +474,13 @@ void QuicheEngineImpl::flushEgress() {
         size_t app_proto_len;
         quiche_conn_application_proto(mConn, &app_proto, &app_proto_len);
 
+        // Notify connect() that connection succeeded
+        notifyConnected(true);
+
         if (mEventCallback) {
             std::string proto(reinterpret_cast<const char*>(app_proto), app_proto_len);
             EventData data = proto;
-            mEventCallback(nullptr, EngineEvent::CONNECTED, data, mUserData);
+            mEventCallback(mWrapper, EngineEvent::CONNECTED, data, mUserData);
         }
     }
 
@@ -601,6 +607,11 @@ void QuicheEngineImpl::recvCallback(EV_P_ ev_io* w, int revents) {
     bool is_closed = quiche_conn_is_closed(impl->mConn);
 
     if (is_closed) {
+        // If connection closed without successful establishment, notify connect() of failure
+        if (!impl->mIsConnected) {
+            impl->notifyConnected(false);
+        }
+
         if (impl->mEventCallback) {
             EventData data;  // Default to NONE type
             impl->mEventCallback(nullptr, EngineEvent::CONNECTION_CLOSED, data, impl->mUserData);
@@ -623,6 +634,11 @@ void QuicheEngineImpl::timeoutCallback(EV_P_ ev_timer* w, int revents) {
     bool is_closed = quiche_conn_is_closed(impl->mConn);
 
     if (is_closed) {
+        // If connection closed without successful establishment, notify connect() of failure
+        if (!impl->mIsConnected) {
+            impl->notifyConnected(false);
+        }
+
         if (impl->mEventCallback) {
             EventData data;  // Default to NONE type
             impl->mEventCallback(nullptr, EngineEvent::CONNECTION_CLOSED, data, impl->mUserData);
@@ -700,92 +716,6 @@ void QuicheEngineImpl::eventLoopThread(QuicheEngineImpl* impl) {
     ev_run(impl->mLoop, 0);
     impl->mIsRunning = false;
 }
-
-bool QuicheEngineImpl::start() {
-    if (mThreadStarted) {
-        mLastError = "Engine already running";
-        return false;
-    }
-
-    // Enable debug logging if requested
-    bool enable_debug = getConfigValue<bool>(ConfigKey::ENABLE_DEBUG_LOG, false);
-    if (enable_debug) {
-        quiche_enable_debug_logging(debugLog, nullptr);
-    }
-
-    // Setup mConnection
-    if (!setupConnection()) {
-        return false;
-    }
-
-    // Create event mLoop
-    mLoop = ev_loop_new(EVFLAG_AUTO);
-    if (!mLoop) {
-        mLastError = "Failed to create event mLoop";
-        return false;
-    }
-
-    // Initialize IO watcher
-    ev_io_init(&mIoWatcher, recvCallback, mSock, EV_READ);
-    ev_io_start(mLoop, &mIoWatcher);
-    mIoWatcher.data = this;
-
-    // Initialize mTimer
-    ev_init(&mTimer, timeoutCallback);
-    mTimer.data = this;
-
-    // Initialize async watcher
-    ev_async_init(&mAsyncWatcher, asyncCallback);
-    ev_async_start(mLoop, &mAsyncWatcher);
-    mAsyncWatcher.data = this;
-
-    // Send initial packet
-    flushEgress();
-
-    // Start event mLoop in background thread using C++11 std::thread
-    mIsRunning = true;
-    try {
-        mLoopThread = std::thread(eventLoopThread, this);
-        mThreadStarted = true;
-    } catch (const std::system_error& e) {
-        mLastError = "Failed to create event loop thread: " + std::string(e.what());
-        mIsRunning = false;
-        ev_loop_destroy(mLoop);
-        mLoop = nullptr;
-        return false;
-    }
-
-    return true;
-}
-
-void QuicheEngineImpl::shutdown(uint64_t app_error, const std::string& reason) {
-    // Send close command to event mLoop
-    if (mIsRunning && mLoop) {
-        auto* cmd = new Command();
-        cmd->type = CommandType::CLOSE;
-        cmd->params.close.error_code = app_error;
-
-        strncpy(cmd->params.close.reason, reason.c_str(), sizeof(cmd->params.close.reason) - 1);
-        cmd->params.close.reason[sizeof(cmd->params.close.reason) - 1] = '\0';
-
-        mCmdQueue.push(cmd);
-        ev_async_send(mLoop, &mAsyncWatcher);
-    }
-
-    // Break event mLoop
-    if (mIsRunning && mLoop) {
-        ev_break(mLoop, EVBREAK_ONE);
-    }
-
-    // Wait for thread to complete using C++11 std::thread::join()
-    if (mThreadStarted && mLoopThread.joinable()) {
-        mLoopThread.join();
-        mThreadStarted = false;
-    }
-
-    mIsRunning = false;
-}
-
 ssize_t QuicheEngineImpl::write(const uint8_t* data, size_t len, bool fin) {
     if (!data || len > MAX_WRITE_DATA_SIZE) {
         mLastError = "Invalid write parameters";
@@ -940,6 +870,210 @@ std::string QuicheEngineImpl::generateRandomHexString() {
     }
 
     return result;
+}
+
+// ============================================================================
+// New API Implementation
+// ============================================================================
+
+bool QuicheEngineImpl::open(const ConfigMap& config) {
+    mConfig = config;
+    mIsOpened = true;
+    return true;
+}
+
+std::string QuicheEngineImpl::connect(const std::string& host, const std::string& port,
+                                      uint64_t timeout_ms) {
+    // 1. Check prerequisites
+    if (!mIsOpened) {
+        mLastError = "Must call open() before connect()";
+        return "";
+    }
+
+    if (!mHasCallback) {
+        mLastError = "Must call setEventCallback() before connect()";
+        return "";
+    }
+
+    // 2. Check if already connected
+    if (mIsConnected) {
+        return mScid;
+    }
+
+    // 3. Save host and port
+    mHost = host;
+    mPort = port;
+
+    // 4. Reset connection state
+    {
+        std::lock_guard<std::mutex> lock(mConnectedMutex);
+        mConnectComplete = false;
+        mConnectSuccess = false;
+    }
+
+    // 5. Enable debug logging if requested
+    bool enable_debug = getConfigValue<bool>(ConfigKey::ENABLE_DEBUG_LOG, false);
+    if (enable_debug) {
+        quiche_enable_debug_logging(debugLog, nullptr);
+    }
+
+    // 6. Setup connection
+    if (!setupConnection()) {
+        notifyConnected(false);
+        return "";
+    }
+
+    // 7. Start event loop
+    if (!startEventLoop()) {
+        notifyConnected(false);
+        return "";
+    }
+
+    // 8. Wait for connection complete or timeout
+    if (timeout_ms == 0) {
+        timeout_ms = 5000;
+    }
+
+    std::unique_lock<std::mutex> lock(mConnectedMutex);
+    bool completed = mConnectedCv.wait_for(
+        lock,
+        std::chrono::milliseconds(timeout_ms),
+        [this] { return mConnectComplete; }
+    );
+
+    // 9. Check result
+    if (!completed) {
+        mLastError = "Connection timeout after " + std::to_string(timeout_ms) + "ms";
+        return "";
+    }
+
+    if (!mConnectSuccess) {
+        if (mLastError.empty()) {
+            mLastError = "Connection failed";
+        }
+        return "";
+    }
+
+    return mScid;
+}
+
+void QuicheEngineImpl::close(uint64_t app_error, const std::string& reason) {
+    // Send close command to event loop
+    if (mIsRunning && mLoop) {
+        auto* cmd = new Command();
+        cmd->type = CommandType::CLOSE;
+        cmd->params.close.error_code = app_error;
+        strncpy(cmd->params.close.reason, reason.c_str(), sizeof(cmd->params.close.reason) - 1);
+        cmd->params.close.reason[sizeof(cmd->params.close.reason) - 1] = '\0';
+
+        mCmdQueue.push(cmd);
+        ev_async_send(mLoop, &mAsyncWatcher);
+    }
+
+    // Break event loop
+    if (mIsRunning && mLoop) {
+        ev_break(mLoop, EVBREAK_ONE);
+    }
+
+    // Wait for thread to exit
+    if (mThreadStarted && mLoopThread.joinable()) {
+        mLoopThread.join();
+        mThreadStarted = false;
+    }
+
+    // Clean up resources
+    if (mConn) {
+        quiche_conn_free(mConn);
+        mConn = nullptr;
+    }
+
+    if (mQuicheCfg) {
+        quiche_config_free(mQuicheCfg);
+        mQuicheCfg = nullptr;
+    }
+
+    if (mSock >= 0) {
+        ::close(mSock);
+        mSock = -1;
+    }
+
+    if (mLoop) {
+        ev_loop_destroy(mLoop);
+        mLoop = nullptr;
+    }
+
+    // Clean up stream buffers
+    {
+        std::lock_guard<std::mutex> lock(mStreamBuffersMutex);
+        for (auto& pair : mStreamBuffers) {
+            delete pair.second;
+        }
+        mStreamBuffers.clear();
+    }
+
+    // Reset state but keep config and callback
+    mIsConnected = false;
+    mIsRunning = false;
+    mHost.clear();
+    mPort.clear();
+    mScid.clear();
+
+    // mIsOpened = true  (preserved)
+    // mHasCallback = true  (preserved)
+    // mConfig  (preserved)
+    // mEventCallback  (preserved)
+}
+
+void QuicheEngineImpl::notifyConnected(bool success) {
+    std::lock_guard<std::mutex> lock(mConnectedMutex);
+    mConnectComplete = true;
+    mConnectSuccess = success;
+    mConnectedCv.notify_all();
+}
+
+bool QuicheEngineImpl::startEventLoop() {
+    if (mThreadStarted) {
+        return true;
+    }
+
+    // Create event loop
+    mLoop = ev_loop_new(EVFLAG_AUTO);
+    if (!mLoop) {
+        mLastError = "Failed to create event loop";
+        return false;
+    }
+
+    // Initialize IO watcher
+    ev_io_init(&mIoWatcher, recvCallback, mSock, EV_READ);
+    ev_io_start(mLoop, &mIoWatcher);
+    mIoWatcher.data = this;
+
+    // Initialize timer
+    ev_init(&mTimer, timeoutCallback);
+    mTimer.data = this;
+
+    // Initialize async watcher
+    ev_async_init(&mAsyncWatcher, asyncCallback);
+    ev_async_start(mLoop, &mAsyncWatcher);
+    mAsyncWatcher.data = this;
+
+    // Send initial packet
+    flushEgress();
+
+    // Start event loop thread
+    mIsRunning = true;
+    try {
+        mLoopThread = std::thread(eventLoopThread, this);
+        mThreadStarted = true;
+    } catch (const std::system_error& e) {
+        mLastError = "Failed to create event loop thread: " + std::string(e.what());
+        mIsRunning = false;
+        ev_loop_destroy(mLoop);
+        mLoop = nullptr;
+        return false;
+    }
+
+    return true;
 }
 
 } // namespace quiche

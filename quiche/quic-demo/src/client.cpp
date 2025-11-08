@@ -272,9 +272,16 @@ int main(int argc, char* argv[]) {
     config[ConfigKey::ENABLE_DEBUG_LOG] = false;                                 // Debug logging off
 
     try {
-        // Initialize engine with configuration map
-        QuicheEngine engine(host, port, config);
+        // Initialize engine (no parameters)
+        QuicheEngine engine;
         global_engine = &engine;
+
+        // Set QUIC configuration
+        if (!engine.open(config)) {
+            fprintf(stderr, "✗ Failed to open engine with config\n");
+            fflush(stderr);
+            return 1;
+        }
 
         // Set event callback
         if (!engine.setEventCallback(onEngineEvent, nullptr)) {
@@ -283,14 +290,17 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        // Start the engine (non-blocking, runs in background thread)
-        printf("Starting event loop...\n\n");
+        // Connect to server (synchronous, blocks until connected or timeout)
+        printf("Connecting to server...\n\n");
         fflush(stdout);
-        if (!engine.start()) {
-            fprintf(stderr, "\n✗ Engine error: %s\n", engine.getLastError().c_str());
+        std::string cid = engine.connect(host, port, 10000);  // 10 second timeout
+        if (cid.empty()) {
+            fprintf(stderr, "\n✗ Connection failed: %s\n", engine.getLastError().c_str());
             fflush(stderr);
             return 1;
         }
+        printf("✓ Connected successfully! Connection ID: %s\n\n", cid.c_str());
+        fflush(stdout);
 
         // Start data receiving thread (polling mode)
         std::thread receiver_thread(dataReceivingThread);
@@ -343,8 +353,8 @@ int main(int argc, char* argv[]) {
         printf("\n");
         fflush(stdout);
 
-        // Shutdown the engine (blocking, waits for graceful shutdown)
-        engine.shutdown(0, "Test completed");
+        // Close the connection gracefully
+        engine.close(0, "Test completed");
 
         // Clean up (automatic with destructor)
         printf("\nCleaning up...\n");

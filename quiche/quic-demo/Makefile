@@ -54,8 +54,8 @@ BUILD_SCRIPT = ../../quiche_engine_all.sh
 # Compiler flags
 INCLUDES = -I./include -I$(INCLUDE_ROOT) -I/usr/local/include
 LDFLAGS = -L./lib -L/usr/local/lib $(FRAMEWORK_FLAGS) $(LINKER_OPT_FLAGS)
-# Note: libquiche_engine.a contains libquiche.a + libev.a + BoringSSL
-LIBS = $(QUICHE_ENGINE_LIB) -L./lib -lquiche -lpthread -ldl -lm
+# Note: libquiche_engine.a contains libquiche.a + BoringSSL (libev must be linked separately)
+LIBS = $(QUICHE_ENGINE_LIB) -L./lib -lquiche -lev -lpthread -ldl -lm
 
 SRC_DIR = src
 BUILD_DIR = build

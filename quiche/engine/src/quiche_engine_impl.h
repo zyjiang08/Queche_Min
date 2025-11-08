@@ -8,6 +8,7 @@
 #include <map>
 #include <vector>
 #include <mutex>
+#include <condition_variable>
 #include <thread>
 
 #include "quiche_thread_utils.h"
@@ -102,7 +103,7 @@ struct StreamReadBuffer {
 // Engine implementation class (PIMPL)
 class QuicheEngineImpl {
 public:
-    QuicheEngineImpl(const std::string& host, const std::string& port, const ConfigMap& config);
+    QuicheEngineImpl();  // No-parameter constructor
     ~QuicheEngineImpl();
 
     // Disable copy
@@ -111,11 +112,12 @@ public:
 
     // Public API implementation
     void setWrapper(QuicheEngine* w) { mWrapper = w; }
+    bool open(const ConfigMap& config);  // New: set configuration
     bool setEventCallback(EventCallback callback, void* user_data);
+    std::string connect(const std::string& host, const std::string& port, uint64_t timeout_ms);  // New: synchronous connect
+    void close(uint64_t app_error, const std::string& reason);  // Replaces shutdown
     ssize_t write(const uint8_t* data, size_t len, bool fin);
     ssize_t read(uint8_t* buf, size_t buf_len, bool& fin);
-    bool start();
-    void shutdown(uint64_t app_error, const std::string& reason);
     bool isConnected() const { return mIsConnected; }
     bool isRunning() const { return mIsRunning; }
     EngineStats getStats() const;
@@ -123,48 +125,57 @@ public:
     std::string getScid() const { return mScid; }
 
 private:
-    // Configuration
+    // ============ Configuration and callback (managed independently) ============
+    ConfigMap mConfig;          // Set by open()
+    EventCallback mEventCallback;  // Set by setEventCallback()
+    void* mUserData;
+
+    // ============ Connection parameters (set by connect()) ============
     std::string mHost;
     std::string mPort;
-    ConfigMap mConfig;
 
-    // QUIC objects (accessed only from event loop thread - no locking needed!)
+    // ============ QUIC objects (accessed only from event loop thread) ============
     quiche_config* mQuicheCfg;
     quiche_conn* mConn;
 
-    // Network
+    // ============ Network resources ============
     int mSock;
     struct sockaddr_storage mLocalAddr;
     socklen_t mLocalAddrLen;
     struct sockaddr_storage mPeerAddr;
     socklen_t mPeerAddrLen;
 
-    // Event loop
+    // ============ Event loop ============
     struct ev_loop* mLoop;
     ev_io mIoWatcher;
     ev_timer mTimer;
     ev_async mAsyncWatcher;
-    std::thread mLoopThread;  // C++11 thread (replaces pthread_t)
+    std::thread mLoopThread;
     bool mThreadStarted;
 
-    // Command queue
+    // ============ Command queue ============
     CommandQueue mCmdQueue;
 
-    // Stream read buffers (populated by event loop thread)
+    // ============ Stream read buffers ============
     std::map<uint64_t, StreamReadBuffer*> mStreamBuffers;
-    std::mutex mStreamBuffersMutex;  // Protect map access (C++ mutex, non-recursive)
+    std::mutex mStreamBuffersMutex;
 
-    // Callbacks
-    EventCallback mEventCallback;
-    void* mUserData;
     QuicheEngine* mWrapper;  // Pointer back to wrapper for event callbacks
 
-    // State
-    bool mIsRunning;
+    // ============ State flags ============
+    bool mIsOpened;      // Whether open() has been called
+    bool mHasCallback;   // Whether setEventCallback() has been called
     bool mIsConnected;
+    bool mIsRunning;
     std::string mLastError;
-    std::string mScid;  // Source Connection ID (8-char hex string)
+    std::string mScid;   // Source Connection ID (8-char hex string)
     uint64_t mStreamId;  // Default stream ID for read/write operations
+
+    // ============ Synchronous connection support ============
+    std::condition_variable mConnectedCv;  // For connect() to wait on
+    std::mutex mConnectedMutex;            // Protects connection state
+    bool mConnectComplete;                 // Whether connection attempt completed
+    bool mConnectSuccess;                  // Whether connection succeeded
 
     // I/O buffers (heap memory instead of static to reduce memory footprint)
 #if defined(__linux__)
@@ -185,8 +196,10 @@ private:
 
     // Helper methods
     bool setupConnection();
+    bool startEventLoop();  // Start event loop (split from old start())
     void flushEgress();
     void processCommands();
+    void notifyConnected(bool success);  // Notify connect() of result
     StreamReadBuffer* getOrCreateStreamBuffer(uint64_t stream_id);
     void readFromQuicheToBuffer(uint64_t stream_id);
     std::string generateRandomHexString();  // Generate 8-char random hex string for SCID
