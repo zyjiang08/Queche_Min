@@ -80,12 +80,76 @@ struct conn_io {
     UT_hash_handle hh;
 };
 
+// Structure to track pending file transfers
+struct pending_transfer {
+    uint64_t stream_id;
+    uint8_t *data;          // File data buffer (owned by this structure)
+    size_t offset;          // Current send offset
+    size_t total_size;      // Total file size
+    bool headers_sent;      // Whether HTTP headers were sent
+    struct conn_io *conn_io; // Associated connection
+    UT_hash_handle hh;      // Hash handle (keyed by stream_id)
+};
+
 static quiche_config *config = NULL;
 
 static struct connections *conns = NULL;
 
+// Global hash table for pending transfers (keyed by stream_id)
+static struct pending_transfer *pending_transfers = NULL;
+
 static void timeout_cb(EV_P_ ev_timer *w, int revents);
 static void flush_egress(struct ev_loop *loop, struct conn_io *conn_io);
+
+// Continue sending data from a pending transfer
+// Returns: 1 if transfer complete, 0 if more data to send, -1 on error
+static int continue_pending_transfer(struct pending_transfer *transfer) {
+    if (!transfer || !transfer->conn_io || !transfer->data) {
+        return -1;
+    }
+
+    uint64_t error_code = 0;
+    const size_t CHUNK_SIZE = 8192;  // 8KB chunks
+
+    while (transfer->offset < transfer->total_size) {
+        size_t remaining = transfer->total_size - transfer->offset;
+        size_t chunk_size = (remaining > CHUNK_SIZE) ? CHUNK_SIZE : remaining;
+        bool is_fin = (transfer->offset + chunk_size >= transfer->total_size);
+
+        ssize_t sent = quiche_conn_stream_send(
+            transfer->conn_io->conn,
+            transfer->stream_id,
+            transfer->data + transfer->offset,
+            chunk_size,
+            is_fin,
+            &error_code
+        );
+
+        if (sent > 0) {
+            transfer->offset += sent;
+            fprintf(stderr, "Continued transfer on stream %" PRIu64 ": sent %zd bytes (offset: %zu/%zu)\n",
+                    transfer->stream_id, sent, transfer->offset, transfer->total_size);
+
+            // Check if transfer is complete
+            if (transfer->offset >= transfer->total_size) {
+                fprintf(stderr, "✓ Transfer complete on stream %" PRIu64 ": %zu/%zu bytes\n",
+                        transfer->stream_id, transfer->offset, transfer->total_size);
+                return 1;  // Complete
+            }
+        } else if (sent == QUICHE_ERR_DONE) {
+            // Stream not writable yet, try again later
+            fprintf(stderr, "Stream %" PRIu64 " not writable, will retry later (offset: %zu/%zu)\n",
+                    transfer->stream_id, transfer->offset, transfer->total_size);
+            return 0;  // Not complete, need to wait
+        } else {
+            fprintf(stderr, "Failed to send on stream %" PRIu64 ": %zd (error: %lu)\n",
+                    transfer->stream_id, sent, error_code);
+            return -1;  // Error
+        }
+    }
+
+    return 1;  // Complete
+}
 
 static void debug_log(const char *line, void *argp) {
     fprintf(stderr, "%s\n", line);
@@ -223,16 +287,14 @@ static void send_http_response(struct conn_io *conn_io, uint64_t stream_id,
 
     fprintf(stderr, "Sent %zd bytes of headers\n", sent);
 
-    // Send file data in chunks
+    // Try to send file data in chunks
     const size_t CHUNK_SIZE = 8192;  // 8KB chunks
-    size_t total_sent = 0;
+    size_t offset = 0;
 
-    for (size_t offset = 0; offset < file_size; offset += CHUNK_SIZE) {
-        size_t chunk_size = file_size - offset;
-        if (chunk_size > CHUNK_SIZE) {
-            chunk_size = CHUNK_SIZE;
-        }
-
+    // Send as much as we can immediately
+    while (offset < file_size) {
+        size_t remaining = file_size - offset;
+        size_t chunk_size = (remaining > CHUNK_SIZE) ? CHUNK_SIZE : remaining;
         bool is_fin = (offset + chunk_size >= file_size);
 
         sent = quiche_conn_stream_send(conn_io->conn, stream_id,
@@ -240,17 +302,76 @@ static void send_http_response(struct conn_io *conn_io, uint64_t stream_id,
                                       chunk_size, is_fin, &error_code);
 
         if (sent > 0) {
-            total_sent += sent;
-            fprintf(stderr, "Sent chunk: %zd bytes (offset: %zu, total: %zu/%zu)\n",
-                    sent, offset, total_sent, file_size);
+            offset += sent;
+            fprintf(stderr, "Sent chunk: %zd bytes (offset: %zu/%zu)\n",
+                    sent, offset, file_size);
+
+            // Check if partial send (sent less than we tried to send)
+            if ((size_t)sent < chunk_size) {
+                // Stream can't accept more data right now, create pending transfer
+                fprintf(stderr, "Stream %" PRIu64 " partial send (%zd/%zu), creating pending transfer (offset: %zu/%zu)\n",
+                        stream_id, sent, chunk_size, offset, file_size);
+
+                struct pending_transfer *transfer = calloc(1, sizeof(*transfer));
+                if (!transfer) {
+                    fprintf(stderr, "Failed to allocate pending transfer\n");
+                    free(file_data);
+                    return;
+                }
+
+                transfer->stream_id = stream_id;
+                transfer->data = file_data;  // Transfer ownership to pending_transfer
+                transfer->offset = offset;
+                transfer->total_size = file_size;
+                transfer->headers_sent = true;
+                transfer->conn_io = conn_io;
+
+                // Add to hash table
+                HASH_ADD(hh, pending_transfers, stream_id, sizeof(uint64_t), transfer);
+
+                fprintf(stderr, "Created pending transfer for stream %" PRIu64 " (offset: %zu/%zu)\n",
+                        stream_id, transfer->offset, transfer->total_size);
+
+                // Don't free file_data - it's now owned by pending_transfer
+                return;
+            }
+        } else if (sent == QUICHE_ERR_DONE) {
+            // Stream not writable at all, create pending transfer for remaining data
+            fprintf(stderr, "Stream %" PRIu64 " not writable, creating pending transfer (offset: %zu/%zu)\n",
+                    stream_id, offset, file_size);
+
+            struct pending_transfer *transfer = calloc(1, sizeof(*transfer));
+            if (!transfer) {
+                fprintf(stderr, "Failed to allocate pending transfer\n");
+                free(file_data);
+                return;
+            }
+
+            transfer->stream_id = stream_id;
+            transfer->data = file_data;  // Transfer ownership to pending_transfer
+            transfer->offset = offset;
+            transfer->total_size = file_size;
+            transfer->headers_sent = true;
+            transfer->conn_io = conn_io;
+
+            // Add to hash table
+            HASH_ADD(hh, pending_transfers, stream_id, sizeof(uint64_t), transfer);
+
+            fprintf(stderr, "Created pending transfer for stream %" PRIu64 " (offset: %zu/%zu)\n",
+                    stream_id, transfer->offset, transfer->total_size);
+
+            // Don't free file_data - it's now owned by pending_transfer
+            return;
         } else {
             fprintf(stderr, "Failed to send data chunk: %zd (error: %lu)\n", sent, error_code);
-            break;
+            free(file_data);
+            return;
         }
     }
 
-    fprintf(stderr, "File transfer complete: %zu/%zu bytes sent\n",
-            total_sent, file_size);
+    // All data sent successfully
+    fprintf(stderr, "✓ File transfer complete: %zu/%zu bytes sent\n",
+            offset, file_size);
 
     free(file_data);
 }
@@ -622,6 +743,46 @@ static void recv_cb(EV_P_ ev_io *w, int revents) {
             }
 
             quiche_stream_iter_free(readable);
+
+            // Check for writable streams and continue pending transfers
+            uint64_t s_writable = 0;
+            quiche_stream_iter *writable = quiche_conn_writable(conn_io->conn);
+
+            while (quiche_stream_iter_next(writable, &s_writable)) {
+                fprintf(stderr, "stream %" PRIu64 " is writable\n", s_writable);
+
+                // Look up pending transfer for this stream
+                struct pending_transfer *transfer = NULL;
+                HASH_FIND(hh, pending_transfers, &s_writable, sizeof(uint64_t), transfer);
+
+                if (transfer) {
+                    fprintf(stderr, "Found pending transfer for stream %" PRIu64 ", continuing...\n",
+                            s_writable);
+
+                    int result = continue_pending_transfer(transfer);
+
+                    if (result == 1) {
+                        // Transfer complete, clean up
+                        fprintf(stderr, "✓ Pending transfer complete for stream %" PRIu64 ", cleaning up\n",
+                                s_writable);
+
+                        HASH_DELETE(hh, pending_transfers, transfer);
+                        free(transfer->data);
+                        free(transfer);
+                    } else if (result < 0) {
+                        // Error occurred, clean up
+                        fprintf(stderr, "✗ Error in pending transfer for stream %" PRIu64 ", cleaning up\n",
+                                s_writable);
+
+                        HASH_DELETE(hh, pending_transfers, transfer);
+                        free(transfer->data);
+                        free(transfer);
+                    }
+                    // result == 0: more data to send, will retry on next writable event
+                }
+            }
+
+            quiche_stream_iter_free(writable);
         }
     }
 
