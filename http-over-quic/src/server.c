@@ -114,7 +114,7 @@ static int continue_pending_transfer(struct pending_transfer *transfer) {
     while (transfer->offset < transfer->total_size) {
         size_t remaining = transfer->total_size - transfer->offset;
         size_t chunk_size = (remaining > CHUNK_SIZE) ? CHUNK_SIZE : remaining;
-        bool is_fin = (transfer->offset + chunk_size >= transfer->total_size);
+        bool is_fin = false;  // Never set fin on send attempt, only after all data sent
 
         ssize_t sent = quiche_conn_stream_send(
             transfer->conn_io->conn,
@@ -132,8 +132,24 @@ static int continue_pending_transfer(struct pending_transfer *transfer) {
 
             // Check if transfer is complete
             if (transfer->offset >= transfer->total_size) {
-                fprintf(stderr, "✓ Transfer complete on stream %" PRIu64 ": %zu/%zu bytes\n",
+                fprintf(stderr, "✓ Transfer complete on stream %" PRIu64 ": %zu/%zu bytes, sending FIN\n",
                         transfer->stream_id, transfer->offset, transfer->total_size);
+
+                // Send final chunk with fin=true to mark end of stream
+                uint64_t error_code_fin = 0;
+                ssize_t fin_sent = quiche_conn_stream_send(
+                    transfer->conn_io->conn,
+                    transfer->stream_id,
+                    NULL, 0, true, &error_code_fin
+                );
+
+                if (fin_sent < 0 && fin_sent != QUICHE_ERR_DONE) {
+                    fprintf(stderr, "Warning: Failed to send FIN on stream %" PRIu64 ": %zd\n",
+                            transfer->stream_id, fin_sent);
+                } else {
+                    fprintf(stderr, "✓ FIN sent on stream %" PRIu64 "\n", transfer->stream_id);
+                }
+
                 return 1;  // Complete
             }
         } else if (sent == QUICHE_ERR_DONE) {
@@ -295,7 +311,7 @@ static void send_http_response(struct conn_io *conn_io, uint64_t stream_id,
     while (offset < file_size) {
         size_t remaining = file_size - offset;
         size_t chunk_size = (remaining > CHUNK_SIZE) ? CHUNK_SIZE : remaining;
-        bool is_fin = (offset + chunk_size >= file_size);
+        bool is_fin = false;  // Never set fin on send attempt, only after all data sent
 
         sent = quiche_conn_stream_send(conn_io->conn, stream_id,
                                       file_data + offset,
@@ -369,9 +385,20 @@ static void send_http_response(struct conn_io *conn_io, uint64_t stream_id,
         }
     }
 
-    // All data sent successfully
-    fprintf(stderr, "✓ File transfer complete: %zu/%zu bytes sent\n",
+    // All data sent successfully, now send fin
+    fprintf(stderr, "✓ File transfer complete: %zu/%zu bytes sent, sending FIN\n",
             offset, file_size);
+
+    // Send final chunk with fin=true (empty chunk to mark end of stream)
+    uint64_t error_code_fin = 0;
+    ssize_t fin_sent = quiche_conn_stream_send(conn_io->conn, stream_id,
+                                               NULL, 0, true, &error_code_fin);
+    if (fin_sent < 0 && fin_sent != QUICHE_ERR_DONE) {
+        fprintf(stderr, "Warning: Failed to send FIN on stream %" PRIu64 ": %zd\n",
+                stream_id, fin_sent);
+    } else {
+        fprintf(stderr, "✓ FIN sent on stream %" PRIu64 "\n", stream_id);
+    }
 
     free(file_data);
 }
