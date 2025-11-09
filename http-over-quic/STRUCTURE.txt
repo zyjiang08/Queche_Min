@@ -1,0 +1,37 @@
+http-over-quic/
+├── README.md              # 项目概述
+├── QUICKSTART.md          # 快速开始指南
+├── TEST_GUIDE.md          # 完整测试指南（详细）
+├── Makefile               # 构建配置
+│
+├── http-client            # 客户端可执行文件 (2.1MB)
+├── http-server            # 服务器可执行文件 (2.1MB)
+│
+├── cert.crt               # TLS自签名证书
+├── cert.key               # TLS私钥
+│
+├── src/                   # 源代码
+│   ├── client.cpp         # HTTP客户端（C++）
+│   └── server.c           # HTTP服务器（C）
+│
+├── include/               # 头文件
+│   ├── http_protocol.h    # HTTP协议定义
+│   ├── quiche.h           # Quiche库头文件
+│   └── uthash.h           # 哈希表工具
+│
+├── lib/                   # 依赖库
+│   └── libquiche.a        # Quiche静态库
+│
+├── data/                  # 测试文件目录
+│   ├── test.bin           # 1MB测试文件
+│   ├── small.bin          # 4KB测试文件
+│   └── tiny.bin           # 1KB测试文件
+│
+└── build/                 # 编译中间文件
+    ├── client.o
+    └── server.o
+
+总计文件大小：
+- 源码：~40KB (client.cpp 14KB + server.c 24KB)
+- 可执行文件：~4.2MB (两个各2.1MB)
+- 文档：~10KB (README + TEST_GUIDE)
